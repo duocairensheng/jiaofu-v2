@@ -179,6 +179,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 custOrders.sort(function(a, b) { return (a.orderTime || '') < (b.orderTime || '') ? 1 : -1; });
                 lastOrder = custOrders[0].orderTime || '-';
             }
+            if (custOrders.length > 0 && (!c.region || c.region === '')) {
+                var schools = [];
+                custOrders.forEach(function(o) { if (o.school && schools.indexOf(o.school) < 0) schools.push(o.school); });
+                if (schools.length > 0) c.region = schools.join('\u3001');
+            }
             var assigneeName = c.assignedTo && pms[c.assignedTo] ? pms[c.assignedTo] : (c.assignedTo || '未分配');
             var actions = '';
             if (!isPromotionManager()) {
@@ -193,7 +198,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 '<td>' + (c.region || '-') + '</td>' +
                 '<td>' + (c.phone || '-') + '</td>' +
                 '<td>' + assigneeName + '</td>' +
-                '<td>' + custOrders.length + '</td>' +
+                '<td><a href="#" style="color:#1890ff;" onclick="window.showCustomerOrders(''" + (c.name || '').replace(/'/g, "\\'") + "''); return false;">" + custOrders.length + '</a></td>' +
                 '<td>' + lastOrder + '</td>' +
                 '<td class="action-cell">' + actions + '</td>' +
                 '</tr>';
@@ -453,9 +458,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     updateTime: new Date().toLocaleString()
                 });
                 localStorage.setItem('inventory', JSON.stringify(inventory));
+                if (window.BitableAPI) { window.BitableAPI.createInventory(inventory[inventory.length-1]).catch(function(e){ console.error(e); }); }
                 alert('产品添加成功！');
                 closeModal();
                 renderInventoryTable();
+                renderDashboard();
             };
         });
     }
@@ -664,6 +671,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 orderData.orderTime = getTodayDate();
                 orders.push(orderData);
                 localStorage.setItem('orders', JSON.stringify(orders));
+                if (window.BitableAPI) { window.BitableAPI.createOrder(orderData).catch(function(e){ console.error(e); }); }
                 // 自动同步客户：报单人默认为该客户的负责人
                 var custs = JSON.parse(localStorage.getItem('customers') || '[]');
                 var cn = orderData.customer;
@@ -731,7 +739,10 @@ document.addEventListener('DOMContentLoaded', function() {
                         });
                         inventory = inventory.concat(newItems);
                         localStorage.setItem('inventory', JSON.stringify(inventory));
+                        if (window.BitableAPI) { newItems.forEach(function(it){ window.BitableAPI.createInventory(it).catch(function(){}); }); }
                         alert('成功导入 ' + newItems.length + ' 条库存数据！');
+                        renderInventoryTable();
+                        renderDashboard();
                         renderInventoryTable();
                     } catch (err) { console.error(err); alert('Excel 文件解析失败！'); }
                 };
@@ -794,7 +805,10 @@ document.addEventListener('DOMContentLoaded', function() {
                         });
                         orders = orders.concat(newOrders);
                         localStorage.setItem('orders', JSON.stringify(orders));
+                        if (window.BitableAPI) { newOrders.forEach(function(it){ window.BitableAPI.createOrder(it).catch(function(){}); }); }
                         alert('成功导入 ' + newOrders.length + ' 条报单数据！');
+                        renderOrdersTable();
+                        renderDashboard();
                         renderOrdersTable();
                         renderDashboard();
                     } catch (err) { console.error(err); alert('Excel 文件解析失败！'); }
@@ -835,6 +849,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 };
                 customers.push(newCust);
                 saveCustomers(customers);
+                if (window.BitableAPI) { window.BitableAPI.createCustomer(newCust).catch(function(e){ console.error(e); }); }
                 window.closeModal();
                 renderCustomersTable();
             };
@@ -935,6 +950,7 @@ document.addEventListener('DOMContentLoaded', function() {
             dat.orderTime = getTodayDate();
             orders.push(dat);
             localStorage.setItem('orders', JSON.stringify(orders));
+            if (window.BitableAPI) { window.BitableAPI.createOrder(dat).catch(function(e){ console.error(e); }); }
             alert('报单添加成功！');
             closeModal();
             renderOrdersTable();
@@ -948,7 +964,7 @@ document.addEventListener('DOMContentLoaded', function() {
         var tbody = document.getElementById('inventoryTableBody');
         if (!tbody) return;
         if (data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;color:#999;">暂无数据，请导入或添加库存</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="14" style="text-align:center;color:#999;">暂无数据，请导入或添加库存</td></tr>';
             return;
         }
         tbody.innerHTML = data.map(function(item) {
@@ -969,10 +985,155 @@ document.addEventListener('DOMContentLoaded', function() {
                 '<td>' + diffStr + '</td>' +
                 '<td><span class="status-badge status-' + statusCls + '">' + item.status + '</span></td>' +
                 '<td>' + (item.updateTime || '-') + '</td>' +
-                '<td><button class="btn-icon" onclick="deleteInventory(\'' + item.id + '\')">🗑️</button></td>' +
+                '<td><button class="btn btn-sm btn-success" onclick="window.addInventoryStock(\'' + item.id + '\')">+增加库存</button>' +
+                '<button class="btn-icon" onclick="deleteInventory(\'' + item.id + '\')">🗑️</button>' +
+                '<button class="btn btn-sm btn-info" onclick="window.showStockLog(\'' + item.id + '\'')">✉️记录</button></td>' +
                 '</tr>';
         }).join('');
     }
+
+    // ========== 库存增加与日志 ==========
+    function getStockLogs() { return JSON.parse(localStorage.getItem('stockLogs') || '[]'); }
+    function saveStockLogs(list) { localStorage.setItem('stockLogs', JSON.stringify(list)); }
+
+    window.addInventoryStock = function(id) {
+        var inventory = getInventoryData();
+        var item = inventory.find(function(x) { return x.id === id; });
+        if (!item) { alert('产品不存在'); return; }
+        var body = '<div class="form-group"><label>当前产品</label><p style="font-weight:bold;margin:4px 0;">' + item.name + '</p></div>';
+        body += '<div class="form-group"><label>现有库存</label><p style="margin:4px 0;">' + (item.quantity || 0) + '</p></div>';
+        body += '<div class="form-group"><label>增加数量</label><input type="number" id="addStockQty" min="1" value="1" style="width:100%;padding:8px;"></div>';
+        body += '<div class="form-group"><label>备注</label><input type="text" id="addStockNote" placeholder="入库原因" style="width:100%;padding:8px;"></div>';
+        window.openModal('增加库存', body);
+        var confirmBtn = document.querySelector('.modal-confirm');
+        if (confirmBtn) {
+            confirmBtn.onclick = function() {
+                var qty = parseInt(document.getElementById('addStockQty').value) || 0;
+                var note = document.getElementById('addStockNote').value || '';
+                if (qty <= 0) { alert('请输入有效数量'); return; }
+                if (!item.originalQty) item.originalQty = item.quantity || 0;
+                item.quantity = (item.quantity || 0) + qty;
+                item.updateTime = new Date().toISOString().slice(0, 10);
+                var logs = getStockLogs();
+                logs.push({ id: 'log_' + Date.now(), inventoryId: id, productName: item.name, change: qty, note: note, time: new Date().toLocaleString() });
+                saveStockLogs(logs);
+                localStorage.setItem('inventory', JSON.stringify(inventory));
+                if (window.BitableAPI) { window.BitableAPI.updateInventory(id, item).catch(function(){}); }
+                window.closeModal();
+                renderInventoryTable();
+                renderDashboard();
+            };
+        }
+    };
+
+    window.showStockLog = function(id) {
+        var inventory = getInventoryData();
+        var item = inventory.find(function(x) { return x.id === id; });
+        if (!item) { alert('产品不存在'); return; }
+        var logs = getStockLogs().filter(function(l) { return l.inventoryId === id; });
+        var body = '<h4>' + item.name + ' - 库存变动记录</h4>';
+        if (logs.length === 0) {
+            body += '<p style="color:#999;">暂无变动记录</p>';
+        } else {
+            body += '<table style="width:100%;"><thead><tr><th>时间</th><th>变动数量</th><th>备注</th></tr></thead><tbody>';
+            logs.slice(-50).reverse().forEach(function(l) {
+                body += '<tr><td>' + l.time + '</td><td style="color:' + (l.change > 0 ? '#28a745' : '#dc3545') + ';">' + (l.change > 0 ? '+' : '') + l.change + '</td><td>' + (l.note || '-') + '</td></tr>';
+            });
+            body += '</tbody></table>';
+        }
+        window.openModal('库存变动记录', body);
+        var confirmBtn = document.querySelector('.modal-confirm');
+        if (confirmBtn) confirmBtn.style.display = 'none';
+        var cancelBtn = document.querySelector('.modal-cancel');
+        if (cancelBtn) cancelBtn.textContent = '关闭';
+    };
+
+    // ========== 报单导出 ==========
+    window.exportOrders = function() {
+        var orders = JSON.parse(localStorage.getItem('orders') || '[]');
+        var filterStatus = document.getElementById('orderFilterStatus') && document.getElementById('orderFilterStatus').value || 'all';
+        var searchText = (document.getElementById('orderSearch') && document.getElementById('orderSearch').value || '').toLowerCase();
+        var filtered = orders;
+        if (isPromotionManager()) {
+            var myNames = getAssignedCustomerNames();
+            filtered = filtered.filter(function(o) { return myNames.indexOf(o.customer) >= 0; });
+        }
+        if (searchText) {
+            filtered = filtered.filter(function(o) {
+                return (o.company || '').toLowerCase().indexOf(searchText) >= 0 ||
+                    (o.customer || '').toLowerCase().indexOf(searchText) >= 0 ||
+                    (o.school || '').toLowerCase().indexOf(searchText) >= 0 ||
+                    (o.name || '').toLowerCase().indexOf(searchText) >= 0;
+            });
+        }
+        if (filterStatus !== 'all') {
+            filtered = filtered.filter(function(o) { return o.status === filterStatus; });
+        }
+        if (filtered.length === 0) { alert('没有匹配的报单数据'); return; }
+        var csv = '\uFEFF报单时间,公司名称,客户名称,学校名称,产品系列,产品名称,年级,科目,册次,版本,定价,学用数量,教师学用数量,合计数量,教用数量,金额,发货渠道,发货地址,发货状态\n';
+        filtered.forEach(function(o) {
+            var tot = o.totalQty || (o.studentQty||0)+(o.teacherQty||0);
+            csv += [o.orderTime||'', o.company||'', o.customer||'', o.school||'', o.series||'', o.name||'',
+                    o.grade||'', o.subject||'', o.volume||'', o.version||'', o.price||0, o.studentQty||0,
+                    o.teacherQty||0, tot, o.teachingQty||0, o.amount||0, o.channel||'',
+                    o.address||'', o.status||''].join(',') + '\n';
+        });
+        var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = '报单导出_' + new Date().toISOString().slice(0,10) + '.csv';
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    // ========== 库存联动计算 ==========
+    function updateInventoryFromOrders() {
+        var inventory = getInventoryData();
+        var orders = JSON.parse(localStorage.getItem('orders') || '[]');
+        var changed = false;
+        inventory.forEach(function(item) {
+            var key = (item.series||'') + '|' + (item.name||'') + '|' + (item.subject||'') + '|' + (item.volume||'');
+            var productOrders = orders.filter(function(o) {
+                return ((o.series||'') + '|' + (o.name||'') + '|' + (o.subject||'') + '|' + (o.volume||'')) === key;
+            });
+            var original = item.originalQty || item.quantity || 0;
+            var orderedQty = productOrders.reduce(function(s, o) { return s + (o.totalQty || (o.studentQty||0)+(o.teacherQty||0)); }, 0);
+            var shippedQty = productOrders.filter(function(o) { return o.status === '已发货'; }).reduce(function(s, o) { return s + (o.totalQty || (o.studentQty||0)+(o.teacherQty||0)); }, 0);
+            var newTheory = Math.max(0, original - orderedQty);
+            var newActual = Math.max(0, original - shippedQty);
+            if (item.theoryQty !== newTheory || item.actualQty !== newActual) {
+                item.theoryQty = newTheory;
+                item.actualQty = newActual;
+                changed = true;
+            }
+        });
+        if (changed) localStorage.setItem('inventory', JSON.stringify(inventory));
+    }
+
+    // ========== 客户报单明细 ==========
+    window.showCustomerOrders = function(customerName) {
+        var orders = JSON.parse(localStorage.getItem('orders') || '[]');
+        var custOrders = orders.filter(function(o) { return o.customer === customerName; });
+        custOrders.sort(function(a, b) { return (a.orderTime || '') < (b.orderTime || '') ? 1 : -1; });
+        var body = '<h4>' + customerName + ' - 报单明细 (' + custOrders.length + '条)</h4>';
+        if (custOrders.length === 0) {
+            body += '<p style="color:#999;">暂无报单记录</p>';
+        } else {
+            body += '<table style="width:100%;font-size:12px;"><thead><tr><th>时间</th><th>学校</th><th>产品</th><th>科目</th><th>数量</th><th>金额</th><th>状态</th></tr></thead><tbody>';
+            custOrders.forEach(function(o) {
+                var tot = o.totalQty || (o.studentQty||0)+(o.teacherQty||0);
+                body += '<tr><td>' + (o.orderTime || '-') + '</td><td>' + (o.school || '-') + '</td><td>' + (o.name || '-') + '</td><td>' + (o.subject || '-') + '</td><td>' + tot + '</td><td>A' + parseFloat(o.amount||0).toFixed(2) + '</td><td>' + (o.status || '-') + '</td></tr>';
+            });
+            body += '</tbody></table>';
+        }
+        window.openModal('客户报单明细', body);
+        var confirmBtn = document.querySelector('.modal-confirm');
+        if (confirmBtn) confirmBtn.style.display = 'none';
+        var cancelBtn = document.querySelector('.modal-cancel');
+        if (cancelBtn) cancelBtn.textContent = '关闭';
+    };
+
 
     function renderOrdersTable(data) {
         if (!data) data = JSON.parse(localStorage.getItem('orders') || '[]');
@@ -1017,10 +1178,10 @@ document.addEventListener('DOMContentLoaded', function() {
             var tot = sQty + tQty;
             var amt = item.amount || 0;
             return '<tr>' +
-                '<td>' + (item.orderTime || '-') + '</td>' +
-                '<td>' + (item.company || '-') + '</td>' +
-                '<td>' + (item.customer || '-') + '</td>' +
-                '<td>' + (item.school || '-') + '</td>' +
+                '<td class="sticky-col col-time">' + (item.orderTime || '-') + '</td>' +
+                '<td class="sticky-col col-company">' + (item.company || '-') + '</td>' +
+                '<td class="sticky-col col-customer">' + (item.customer || '-') + '</td>' +
+                '<td class="sticky-col col-school">' + (item.school || '-') + '</td>' +
                 '<td>' + (item.series || '-') + '</td>' +
                 '<td>' + (item.name || '-') + '</td>' +
                 '<td>' + (item.grade || '-') + '</td>' +
@@ -1049,6 +1210,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // ==================== 仪表盘渲染 ====================
     function renderDashboard() {
+        updateInventoryFromOrders();
         var orders = JSON.parse(localStorage.getItem('orders') || '[]');
         // 推广经理只看分配客户的报单
         if (isPromotionManager()) {
@@ -1097,7 +1259,9 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!confirm('确定要删除这条库存记录吗？')) return;
         var inventory = getInventoryData().filter(function(item) { return item.id != id; });
         localStorage.setItem('inventory', JSON.stringify(inventory));
+        if (window.BitableAPI) { window.BitableAPI.deleteInventory(id).catch(function(){}); }
         renderInventoryTable();
+        renderDashboard();
     };
 
     window.shipOrder = function(id) {
@@ -1109,6 +1273,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         if (found) {
             localStorage.setItem('orders', JSON.stringify(orders));
+            if (window.BitableAPI) { window.BitableAPI.updateOrder(id, found).catch(function(){}); }
             renderOrdersTable();
             renderDashboard();
         }
@@ -1118,6 +1283,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!confirm('确定要删除这条报单记录吗？')) return;
         var orders = JSON.parse(localStorage.getItem('orders') || '[]').filter(function(item) { return item.id != id; });
         localStorage.setItem('orders', JSON.stringify(orders));
+        if (window.BitableAPI) { window.BitableAPI.deleteOrder(id).catch(function(){}); }
         renderOrdersTable();
         renderDashboard();
     };
@@ -1235,6 +1401,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     window.renderAnalytics = function() {
+        updateInventoryFromOrders();
         var orders = JSON.parse(localStorage.getItem('orders') || '[]');
         // 推广经理只看分配客户的报单
         if (isPromotionManager()) {

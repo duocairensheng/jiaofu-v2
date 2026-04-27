@@ -151,3 +151,17 @@ input[readonly] { background: #f8f9fa; color: #666; cursor: default; }
     .charts-row { grid-template-columns: 1fr; }
     .modal-content { max-width: 95%; }
 }
+
+/* ===== 报单锁定列 ===== */
+.sticky-col { position: sticky; background: white; z-index: 1; }
+.col-time { left: 0; min-width: 90px; }
+.col-company { left: 90px; min-width: 120px; }
+.col-customer { left: 210px; min-width: 100px; }
+.col-school { left: 310px; min-width: 120px; }
+#ordersTableBody tr:hover .sticky-col { background: #f0f7ff; }
+/* ===== 报单表格横向滚动 ===== */
+#ordersTableWrapper { overflow-x: auto; max-width: 100%; }
+#ordersTableWrapper table { min-width: 2000px; }
+/* ===== 报单导出按钮 ===== */
+.btn-export { background: #722ed1; color: white; }
+.btn-export:hover { background: #531dab; }

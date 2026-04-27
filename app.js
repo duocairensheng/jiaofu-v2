@@ -1035,8 +1035,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 '<td>¥' + parseFloat(amt).toFixed(2) + '</td>' +
                 '<td>' + (item.channel || '-') + '</td>' +
                 '<td class="addr-cell">' + (item.address || '-') + '</td>' +
-                '<td>' + (item.status || '-') + '</td>' +
-                '<td><button class="btn-icon" onclick="deleteOrder(\'' + item.id + '\')">🗑️</button></td>' +
+                '<td class="' + (item.status === '已发货' ? 'status-shipped' : '') + '">' + (item.status || '-') + '</td>' +
+                '<td><button class="btn-icon btn-ship" onclick="shipOrder(\'' + item.id + '\')">📦</button><button class="btn-icon" onclick="deleteOrder(\'' + item.id + '\')">🗑️</button></td>' +
                 '</tr>';
         }).join('');
     }
@@ -1098,6 +1098,20 @@ document.addEventListener('DOMContentLoaded', function() {
         var inventory = getInventoryData().filter(function(item) { return item.id != id; });
         localStorage.setItem('inventory', JSON.stringify(inventory));
         renderInventoryTable();
+    };
+
+    window.shipOrder = function(id) {
+        var orders = JSON.parse(localStorage.getItem('orders') || '[]');
+        var found = false;
+        orders = orders.map(function(item) {
+            if (item.id == id) { item.status = '已发货'; found = true; }
+            return item;
+        });
+        if (found) {
+            localStorage.setItem('orders', JSON.stringify(orders));
+            renderOrdersTable();
+            renderDashboard();
+        }
     };
 
     window.deleteOrder = function(id) {

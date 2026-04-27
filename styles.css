@@ -31,6 +31,11 @@ body { font-family: 'Microsoft YaHei', sans-serif; background: #f5f5f5; }
 .btn-outline { background: transparent; border: 1px dashed #667eea; color: #667eea; }
 .btn-outline:hover { background: #667eea; color: white; }
 .btn-icon { background: none; border: none; cursor: pointer; font-size: 16px; padding: 4px 8px; }
+.btn-ship { color: #28a745; }
+.btn-ship:hover { color: #1e7e34; }
+
+/* 已发货状态高亮 */
+.status-shipped { color: #28a745; font-weight: 600; }
 
 /* 布局 */
 #app { display: flex; height: 100vh; }

@@ -1377,8 +1377,6 @@ document.addEventListener('DOMContentLoaded', function() {
         } catch (e) { console.warn('图表渲染失败:', e); }
     }
 
-    // 系统设置
-    var saveFeishuBtn = document.getElementById('saveFeishuConfig');
     // ==================== 系统设置 ====================
     var saveFeishuBtn = document.getElementById('saveFeishuConfig');
     if (saveFeishuBtn) {
@@ -1392,7 +1390,57 @@ document.addEventListener('DOMContentLoaded', function() {
                 customersTable: document.getElementById('feishuCustomersTable').value
             };
             localStorage.setItem('feishuConfig', JSON.stringify(config));
+            // 同步更新运行时配置
+            if (window.FEISHU_BITABLE) {
+                window.FEISHU_BITABLE.appId = config.appId;
+                window.FEISHU_BITABLE.appSecret = config.appSecret;
+                window.FEISHU_BITABLE.appToken = config.appToken;
+                window.FEISHU_BITABLE.tables.inventory = config.inventoryTable;
+                window.FEISHU_BITABLE.tables.orders = config.ordersTable;
+                window.FEISHU_BITABLE.tables.customers = config.customersTable;
+            }
             alert('飞书配置已保存！');
+        });
+    }
+
+    // 测试飞书连接
+    var testFeishuBtn = document.getElementById('testFeishuConnection');
+    if (testFeishuBtn) {
+        testFeishuBtn.addEventListener('click', function() {
+            var cfg = window.FEISHU_BITABLE || JSON.parse(localStorage.getItem('feishuConfig') || '{}');
+            if (!cfg.appId || !cfg.appSecret) {
+                alert('请先填写 App ID 和 App Secret');
+                return;
+            }
+            testFeishuBtn.disabled = true;
+            testFeishuBtn.textContent = '连接中...';
+            fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json; charset=utf-8' },
+                body: JSON.stringify({ app_id: cfg.appId, app_secret: cfg.appSecret })
+            }).then(function(r) { return r.json(); }).then(function(data) {
+                if (data.code === 0) {
+                    var token = data.tenant_access_token;
+                    // 进一步测试获取表列表
+                    return fetch('https://open.feishu.cn/open-apis/bitable/v1/apps/' + cfg.appToken + '/tables', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    }).then(function(r2) { return r2.json(); }).then(function(tdata) {
+                        if (tdata.code === 0) {
+                            var names = tdata.data.items.map(function(t) { return t.name; }).join(', ');
+                            alert('连接成功！\nToken 获取: OK\n多维表格表: ' + names);
+                        } else {
+                            alert('连接成功！Token OK，但访问多维表格失败: ' + tdata.msg + ' (code=' + tdata.code + ')\n请检查 App Token 和权限');
+                        }
+                    });
+                } else {
+                    alert('连接失败！\n错误码: ' + data.code + '\n错误信息: ' + data.msg);
+                }
+            }).catch(function(err) {
+                alert('网络请求失败: ' + err.message);
+            }).finally(function() {
+                testFeishuBtn.disabled = false;
+                testFeishuBtn.textContent = '测试连接';
+            });
         });
     }
 
@@ -1457,14 +1505,16 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // 加载飞书配置
+    // 加载飞书配置（localStorage优先，然后fallback到默认配置）
     var feishuCfg = JSON.parse(localStorage.getItem('feishuConfig') || '{}');
-    if (feishuCfg.appId) document.getElementById('feishuAppId').value = feishuCfg.appId || '';
-    if (feishuCfg.appSecret) document.getElementById('feishuAppSecret').value = feishuCfg.appSecret || '';
-    if (feishuCfg.appToken) document.getElementById('feishuAppToken').value = feishuCfg.appToken || '';
-    if (feishuCfg.inventoryTable) document.getElementById('feishuInventoryTable').value = feishuCfg.inventoryTable || '';
-    if (feishuCfg.ordersTable) document.getElementById('feishuOrdersTable').value = feishuCfg.ordersTable || '';
-    if (feishuCfg.customersTable) document.getElementById('feishuCustomersTable').value = feishuCfg.customersTable || '';
+    var defaultCfg = (window.FEISHU_BITABLE || {});
+    var defaultTables = defaultCfg.tables || {};
+    document.getElementById('feishuAppId').value = feishuCfg.appId || defaultCfg.appId || '';
+    document.getElementById('feishuAppSecret').value = feishuCfg.appSecret || defaultCfg.appSecret || '';
+    document.getElementById('feishuAppToken').value = feishuCfg.appToken || defaultCfg.appToken || '';
+    document.getElementById('feishuInventoryTable').value = feishuCfg.inventoryTable || defaultTables.inventory || '';
+    document.getElementById('feishuOrdersTable').value = feishuCfg.ordersTable || defaultTables.orders || '';
+    document.getElementById('feishuCustomersTable').value = feishuCfg.customersTable || defaultTables.customers || '';
 
     console.log('系统初始化完成！');
 });

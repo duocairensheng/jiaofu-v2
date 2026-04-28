@@ -472,6 +472,8 @@ document.addEventListener('DOMContentLoaded', function() {
     if (addOrderBtnEl) {
         addOrderBtnEl.onclick = null;
         addOrderBtnEl.addEventListener('click', function() {
+            window.openMultiOrderForm();
+            return;
             var companies = getCompanies();
             var channels = getChannels();
             var coOpts = companies.map(function(c) { return '<option value="' + c + '">' + c + '</option>'; }).join('');
@@ -964,14 +966,33 @@ document.addEventListener('DOMContentLoaded', function() {
         var tbody = document.getElementById('inventoryTableBody');
         if (!tbody) return;
         if (data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="14" style="text-align:center;color:#999;">暂无数据，请导入或添加库存</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="15" style="text-align:center;color:#999;">暂无数据，请导入或添加库存</td></tr>';
             return;
         }
-        tbody.innerHTML = data.map(function(item) {
+        var searchText = (document.getElementById('inventorySearch') && document.getElementById('inventorySearch').value || '').toLowerCase();
+        var filtered = data;
+        if (searchText) {
+            filtered = data.filter(function(item) {
+                return (item.name || '').toLowerCase().indexOf(searchText) >= 0 ||
+                    (item.series || '').toLowerCase().indexOf(searchText) >= 0 ||
+                    (item.subject || '').toLowerCase().indexOf(searchText) >= 0;
+            });
+        }
+        if (filtered.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="15" style="text-align:center;color:#999;">无匹配库存数据</td></tr>';
+            return;
+        }
+        var expandedSet = {};
+        var html = '';
+        filtered.forEach(function(item) {
             var diff = (item.actualQty || 0) - (item.theoryQty || 0);
             var diffStr = diff > 0 ? '+' + diff : String(diff);
-            var statusCls = item.status === '正常' ? 'success' : 'warning';
-            return '<tr>' +
+            var statusCls = item.status === '正常' ? 'success' : (item.status === '预警' ? 'warning' : 'danger');
+            var subcats = item.subcategories || [];
+            var totalAdded = subcats.reduce(function(s, sc) { return s + (sc.qty || 0); }, 0);
+            var itemId = item.id;
+            // Main row
+            html += '<tr class="inventory-row" data-item-id="' + itemId + '">' +
                 '<td>' + (item.series || '-') + '</td>' +
                 '<td>' + (item.name || '-') + '</td>' +
                 '<td>' + (item.grade || '-') + '</td>' +
@@ -983,14 +1004,58 @@ document.addEventListener('DOMContentLoaded', function() {
                 '<td>' + (item.theoryQty || 0) + '</td>' +
                 '<td>' + (item.actualQty || 0) + '</td>' +
                 '<td>' + diffStr + '</td>' +
-                '<td><span class="status-badge status-' + statusCls + '">' + item.status + '</span></td>' +
+                '<td><span class="status-badge status-' + statusCls + '">' + (item.status || '正常') + '</span></td>' +
                 '<td>' + (item.updateTime || '-') + '</td>' +
-                '<td><button class="btn btn-sm btn-success" onclick="window.addInventoryStock(\'' + item.id + '\')">+增加库存</button>' +
-                '<button class="btn-icon" onclick="deleteInventory(\'' + item.id + '\')">🗑️</button>' +
-                '<button class="btn btn-sm btn-info" onclick="window.showStockLog(\'' + item.id + '\'')">✉️记录</button></td>' +
+                '<td>' +
+                '<button class="btn btn-sm btn-success" onclick="window.addInventoryStock(\'' + itemId + '\')">+增加库存</button>' +
+                '<button class="btn btn-sm btn-info" onclick="window.addInventorySubcategory(\'' + itemId + '\')">子分类</button>' +
+                '<button class="btn-icon" onclick="window.deleteInventory(\'' + itemId + '\')" title="删除">🗑️</button>' +
+                '<button class="btn btn-sm btn-info" onclick="window.showStockLog(\'' + itemId + '\')">记录</button>' +
+                '</td>' +
                 '</tr>';
-        }).join('');
+            // Subcategory expand toggle row
+            if (subcats.length > 0) {
+                html += '<tr class="subcat-toggle-row" data-item-id="' + itemId + '" onclick="window.toggleSubcategoryView(\'' + itemId + '\')" style="cursor:pointer;background:#f8f9fa;">' +
+                    '<td colspan="15" style="padding:4px 12px;font-size:12px;color:#666;">' +
+                    '📋 累计新增 <b>' + totalAdded + '</b> 次，共 <b>' + subcats.length + '</b> 笔记录 <span class="expand-arrow" id="arrow_' + itemId + '">▶</span>' +
+                    '</td></tr>';
+                // Subcategory detail rows (hidden by default)
+                subcats.slice().reverse().forEach(function(sc, idx) {
+                    html += '<tr class="subcat-detail-row subcat-' + itemId + '" style="display:none;background:#f0f4ff;">' +
+                        '<td colspan="15" style="padding:2px 20px;font-size:11px;">' +
+                        '&nbsp;&nbsp;├ ' + (idx + 1) + '. ' + sc.time + ' | +' + sc.qty +
+                        ' | ' + (sc.note || '无备注') + ' | 操作人: ' + (sc.operator || '-') +
+                        (sc.qty > 0 ? '<button class="btn-icon" onclick="event.stopPropagation();window.deleteSubcategoryEntry(\'' + itemId + '\',\'' + sc.id + '\')" title="删除此记录" style="margin-left:8px;font-size:10px;">❌</button>' : '') +
+                        '</td></tr>';
+                });
+            }
+        });
+        tbody.innerHTML = html;
     }
+    window.toggleSubcategoryView = function(itemId) {
+        var rows = document.querySelectorAll('.subcat-' + itemId);
+        var arrow = document.getElementById('arrow_' + itemId);
+        var visible = rows.length > 0 && rows[0].style.display !== 'none';
+        rows.forEach(function(r) { r.style.display = visible ? 'none' : 'table-row'; });
+        if (arrow) arrow.textContent = visible ? '▶' : '▼';
+    };
+    window.deleteSubcategoryEntry = function(itemId, entryId) {
+        if (!confirm('确定要删除这条子分类记录吗？')) return;
+        var inventory = getInventoryData();
+        var item = inventory.find(function(x) { return x.id === itemId; });
+        if (!item) return;
+        var subcats = item.subcategories || [];
+        var entry = subcats.find(function(s) { return s.id === entryId; });
+        item.subcategories = subcats.filter(function(s) { return s.id !== entryId; });
+        // Recalculate cumulative
+        var totalAdded = (item.subcategories || []).reduce(function(s, sc) { return s + (sc.qty || 0); }, 0);
+        item.quantity = (item._baseQty || 0) + totalAdded;
+        item.originalQty = item.quantity;
+        localStorage.setItem('inventory', JSON.stringify(inventory));
+        if (window.BitableAPI) { window.BitableAPI.updateInventory(itemId, item).catch(function(){}); }
+        renderInventoryTable();
+        renderDashboard();
+    };
 
     // ========== 库存增加与日志 ==========
     function getStockLogs() { return JSON.parse(localStorage.getItem('stockLogs') || '[]'); }
@@ -1000,20 +1065,45 @@ document.addEventListener('DOMContentLoaded', function() {
         var inventory = getInventoryData();
         var item = inventory.find(function(x) { return x.id === id; });
         if (!item) { alert('产品不存在'); return; }
-        var body = '<div class="form-group"><label>当前产品</label><p style="font-weight:bold;margin:4px 0;">' + item.name + '</p></div>';
-        body += '<div class="form-group"><label>现有库存</label><p style="margin:4px 0;">' + (item.quantity || 0) + '</p></div>';
-        body += '<div class="form-group"><label>增加数量</label><input type="number" id="addStockQty" min="1" value="1" style="width:100%;padding:8px;"></div>';
-        body += '<div class="form-group"><label>备注</label><input type="text" id="addStockNote" placeholder="入库原因" style="width:100%;padding:8px;"></div>';
-        window.openModal('增加库存', body);
+        var currentUser = getCurrentUser();
+        var operator = currentUser ? (currentUser.displayName || currentUser.username) : '系统';
+        var body = '<div class="form-group"><label>当前产品</label><p style="font-weight:bold;margin:4px 0;">' + (item.name || '-') + '</p></div>';
+        body += '<div class="form-group"><label>当前库存</label><p style="margin:4px 0;">' + (item.quantity || 0) + '</p></div>';
+        body += '<div class="form-group"><label>增加数量 <span style="color:red;">*</span></label><input type="number" id="addStockQty" min="1" value="1" style="width:100%;padding:8px;"></div>';
+        body += '<div class="form-group"><label>备注</label><input type="text" id="addStockNote" placeholder="采购批次、供应商等" style="width:100%;padding:8px;"></div>';
+        body += '<div class="form-group"><label>增加后库存</label><p style="margin:4px 0;font-weight:bold;color:#28a745;" id="previewQty">' + (item.quantity || 0) + '</p></div>';
+        window.openModal('增加库存 - ' + (item.name || ''), body);
+        // Live preview
+        var qtyInput = document.getElementById('addStockQty');
+        if (qtyInput) {
+            qtyInput.addEventListener('input', function() {
+                var preview = document.getElementById('previewQty');
+                if (preview) preview.textContent = (item.quantity || 0) + (parseInt(qtyInput.value) || 0);
+            });
+        }
         var confirmBtn = document.querySelector('.modal-confirm');
         if (confirmBtn) {
             confirmBtn.onclick = function() {
                 var qty = parseInt(document.getElementById('addStockQty').value) || 0;
                 var note = document.getElementById('addStockNote').value || '';
                 if (qty <= 0) { alert('请输入有效数量'); return; }
-                if (!item.originalQty) item.originalQty = item.quantity || 0;
-                item.quantity = (item.quantity || 0) + qty;
+                // Initialize base tracking
+                if (item._baseQty === undefined) item._baseQty = item.quantity || 0;
+                // Add to subcategories
+                if (!item.subcategories) item.subcategories = [];
+                item.subcategories.push({
+                    id: 'sc_' + Date.now(),
+                    qty: qty,
+                    note: note,
+                    operator: operator,
+                    time: new Date().toLocaleString()
+                });
+                // Update total quantity
+                var totalAdded = item.subcategories.reduce(function(s, sc) { return s + (sc.qty || 0); }, 0);
+                item.quantity = item._baseQty + totalAdded;
+                if (!item.originalQty) item.originalQty = item.quantity;
                 item.updateTime = new Date().toISOString().slice(0, 10);
+                // Also save to stockLogs for backwards compat
                 var logs = getStockLogs();
                 logs.push({ id: 'log_' + Date.now(), inventoryId: id, productName: item.name, change: qty, note: note, time: new Date().toLocaleString() });
                 saveStockLogs(logs);
@@ -1024,6 +1114,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 renderDashboard();
             };
         }
+    };
+
+    // Dedicated subcategory add button (same as addInventoryStock but with explicit UI label)
+    window.addInventorySubcategory = function(id) {
+        window.addInventoryStock(id);
     };
 
     window.showStockLog = function(id) {
@@ -1140,7 +1235,7 @@ document.addEventListener('DOMContentLoaded', function() {
         var tbody = document.getElementById('ordersTableBody');
         if (!tbody) return;
         if (data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="20" style="text-align:center;color:#999;">暂无报单数据</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="21" style="text-align:center;color:#999;">暂无报单数据</td></tr>';
             return;
         }
 
@@ -1168,7 +1263,7 @@ document.addEventListener('DOMContentLoaded', function() {
             filtered = filtered.filter(function(o) { return o.status === filterStatus; });
         }
         if (filtered.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="20" style="text-align:center;color:#999;">无匹配报单数据</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="21" style="text-align:center;color:#999;">无匹配报单数据</td></tr>';
             return;
         }
 
@@ -1197,7 +1292,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 '<td>' + (item.channel || '-') + '</td>' +
                 '<td class="addr-cell">' + (item.address || '-') + '</td>' +
                 '<td class="' + (item.status === '已发货' ? 'status-shipped' : '') + '">' + (item.status || '-') + '</td>' +
-                '<td><button class="btn-icon btn-ship" onclick="shipOrder(\'' + item.id + '\')">📦</button><button class="btn-icon" onclick="deleteOrder(\'' + item.id + '\')">🗑️</button></td>' +
+                '<td class="addr-cell">' + (item.remark || '-') + '</td>' +
+                '<td><button class="btn-icon btn-ship" onclick="shipOrder(\'' + item.id + '\')" title="发货">📦</button><button class="btn-icon" onclick="deleteOrder(\'' + item.id + '\')">🗑️</button></td>' +
                 '</tr>';
         }).join('');
     }
@@ -1264,19 +1360,47 @@ document.addEventListener('DOMContentLoaded', function() {
         renderDashboard();
     };
 
-    window.shipOrder = function(id) {
+    window.openShipmentModal = function(id) {
         var orders = JSON.parse(localStorage.getItem('orders') || '[]');
-        var found = false;
-        orders = orders.map(function(item) {
-            if (item.id == id) { item.status = '已发货'; found = true; }
-            return item;
-        });
-        if (found) {
-            localStorage.setItem('orders', JSON.stringify(orders));
-            if (window.BitableAPI) { window.BitableAPI.updateOrder(id, found).catch(function(){}); }
-            renderOrdersTable();
-            renderDashboard();
+        var order = orders.find(function(o) { return o.id == id; });
+        if (!order) { alert('报单不存在'); return; }
+        if (order.status === '已发货') { alert('该报单已发货'); return; }
+        var body = '<div style="background:#f8f9fa;padding:12px;border-radius:8px;margin-bottom:12px;">';
+        body += '<p><b>公司:</b> ' + (order.company || '-') + ' | <b>客户:</b> ' + (order.customer || '-') + ' | <b>学校:</b> ' + (order.school || '-') + '</p>';
+        body += '<p><b>产品:</b> ' + (order.name || '-') + ' | <b>科目:</b> ' + (order.subject || '-') + ' | <b>册次:</b> ' + (order.volume || '-') + '</p>';
+        body += '<p><b>数量:</b> ' + (order.totalQty || ((order.studentQty||0)+(order.teacherQty||0))) + '册 | <b>金额:</b> ¥' + parseFloat(order.amount || 0).toFixed(2) + '</p>';
+        body += '<p><b>渠道:</b> ' + (order.channel || '-') + ' | <b>地址:</b> ' + (order.address || '-') + '</p>';
+        body += '<p><b>当前状态:</b> <span style="color:orange;">' + (order.status || '未发货') + '</span></p>';
+        body += '</div>';
+        body += '<div class="form-group"><label>备注</label><input type="text" id="shipmentNote" placeholder="发货备注" style="width:100%;padding:8px;"></div>';
+        body += '<p style="color:#666;font-size:13px;">确认后将状态改为 <b style="color:green;">已发货</b></p>';
+        window.openModal('确认发货', body);
+        var confirmBtn = document.querySelector('.modal-confirm');
+        if (confirmBtn) {
+            confirmBtn.style.background = '#28a745';
+            confirmBtn.textContent = '确认发货';
+            confirmBtn.onclick = function() {
+                var note = document.getElementById('shipmentNote').value || '';
+                orders.forEach(function(item) {
+                    if (item.id == id) {
+                        item.status = '已发货';
+                        item.shippingStatus = '已发货';
+                        item.shipTime = new Date().toISOString();
+                        item.shipNote = note;
+                    }
+                });
+                localStorage.setItem('orders', JSON.stringify(orders));
+                if (window.BitableAPI) { window.BitableAPI.updateOrder(id, order).catch(function(){}); }
+                window.closeModal();
+                updateInventoryFromOrders();
+                renderOrdersTable();
+                renderDashboard();
+            };
         }
+    };
+
+    window.shipOrder = function(id) {
+        window.openShipmentModal(id);
     };
 
     window.deleteOrder = function(id) {
@@ -1682,6 +1806,549 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('feishuInventoryTable').value = feishuCfg.inventoryTable || defaultTables.inventory || '';
     document.getElementById('feishuOrdersTable').value = feishuCfg.ordersTable || defaultTables.orders || '';
     document.getElementById('feishuCustomersTable').value = feishuCfg.customersTable || defaultTables.customers || '';
+
+
+    // ==================== 多产品报单表单 ====================
+    window.openMultiOrderForm = function() {
+        var companies = getCompanies();
+        var channels = getChannels();
+        var coOpts = companies.map(function(c) { return '<option value="' + c + '">' + c + '</option>'; }).join('');
+        var chOpts = channels.map(function(c) { return '<option value="' + c + '">' + c + '</option>'; }).join('');
+
+        // Build datalist from existing customers
+        var customers = getCustomers();
+        var custNames = customers.map(function(c) { return c.name; }).sort(function(a,b){return a.localeCompare(b,'zh-CN');});
+
+        var formHTML =
+            '<form id="multiOrderForm">' +
+            '<div class="form-row"><div class="form-group"><label>报单时间</label><input type="date" id="m_orderTime" value="' + getTodayDate() + '" style="width:200px"></div></div>' +
+            '<div class="form-row">' +
+            '<div class="form-group flex-1"><label>公司名称 <span style="color:red;">*</span></label><div class="select-add-row"><select id="m_orderCompany" required><option value="">请选择公司</option>' + coOpts + '</select><button type="button" class="btn btn-sm btn-outline" id="addNewCompany">+ 新增</button></div></div>' +
+            '<div class="form-group flex-1"><label>客户名称 <span style="color:red;">*</span></label><input type="text" id="m_orderCustomer" required placeholder="输入客户名称" list="m_custList"><datalist id="m_custList">' + custNames.map(function(n){return '<option value="'+n+'">';}).join('') + '</datalist></div>' +
+            '</div>' +
+            '<div class="form-group"><label>学校名称 <span style="color:red;">*</span></label><input type="text" id="m_orderSchool" required placeholder="输入学校名称"></div>' +
+            '<hr style="margin:12px 0;"><div style="display:flex;justify-content:space-between;align-items:center;"><h4 style="margin:0;">产品明细</h4><button type="button" class="btn btn-sm btn-success" id="m_addProductRow">+ 添加产品行</button></div>' +
+            '<div id="m_productRows"><div class="product-multi-row" data-row="0" style="border:1px solid #e0e0e0;border-radius:8px;padding:12px;margin-bottom:8px;background:#fafafa;">' +
+            '<div class="form-row">' +
+            '<div class="form-group"><label>产品系列</label><select class="m_series"><option value="">选择系列</option></select></div>' +
+            '<div class="form-group"><label>产品名称</label><select class="m_product"><option value="">选择产品</option></select></div>' +
+            '<div class="form-group"><label>年级</label><select class="m_grade"><option value="">选择</option></select></div>' +
+            '<div class="form-group"><label>科目</label><select class="m_subject"><option value="">选择</option></select></div>' +
+            '<div class="form-group"><label>册次</label><select class="m_volume"><option value="">选择</option></select></div>' +
+            '<div class="form-group"><label>版本</label><select class="m_version"><option value="">选择</option></select></div>' +
+            '<div class="form-group"><label>定价</label><input type="number" class="m_price" value="0" step="0.01" style="width:80px;"></div></div>' +
+            '<div class="form-row">' +
+            '<div class="form-group"><label>学用数量</label><input type="number" class="m_studentQty" value="0" min="0" style="width:80px;"></div>' +
+            '<div class="form-group"><label>教师学用</label><input type="number" class="m_teacherQty" value="0" min="0" style="width:90px;"></div>' +
+            '<div class="form-group"><label>教用数量</label><input type="number" class="m_teachingQty" value="0" min="0" style="width:80px;"></div>' +
+            '<div class="form-group"><label>合计</label><span class="m_rowTotal" style="font-weight:bold;">0</span></div>' +
+            '<div class="form-group"><label>金额</label><span class="m_rowAmount" style="font-weight:bold;">¥0</span></div>' +
+            '<div class="form-group"><button type="button" class="btn btn-sm btn-danger m_removeRow">✕</button></div></div></div></div>' +
+            '<hr style="margin:12px 0;"><div style="font-size:16px;">总计: <b id="m_grandQty" style="color:#28a745;">0</b> 册 | 金额: <b id="m_grandAmt" style="color:#28a745;">¥0</b></div>' +
+            '<div class="form-section-title">发货信息</div>' +
+            '<div class="form-row">' +
+            '<div class="form-group flex-1"><label>发货渠道</label><div class="select-add-row"><select id="m_orderChannel"><option value="">选择渠道</option>' + chOpts + '</select><button type="button" class="btn btn-sm btn-outline" id="addNewChannel">+ 新增</button></div></div>' +
+            '<div class="form-group flex-1"><label>发货状态</label><select id="m_orderStatus"><option value="已报">已报</option><option value="待发货" selected>待发货</option><option value="等通知发货">等通知发货</option></select></div>' +
+            '<div class="form-group flex-1"><label>发货地址</label><input type="text" id="m_orderAddress" placeholder="收货地址"></div></div>' +
+            '<div class="form-group"><label>备注</label><input type="text" id="m_orderRemark" placeholder="备注信息"></div>' +
+            '</form>';
+
+        window.openModal('添加报单（多产品）', formHTML);
+
+        // Populate cascades after DOM renders
+        setTimeout(function() {
+            var inventory = getInventoryData();
+            // Build cascade hierarchy
+            var hier = {};
+            inventory.forEach(function(item) {
+                if (!item.series) return;
+                if (!hier[item.series]) hier[item.series] = {};
+                if (!hier[item.series][item.name || '']) hier[item.series][item.name || ''] = {};
+                var gkey = (item.grade || '');
+                if (!hier[item.series][item.name || ''][gkey]) hier[item.series][item.name || ''][gkey] = {};
+                var skey = (item.subject || '');
+                if (!hier[item.series][item.name || ''][gkey][skey]) hier[item.series][item.name || ''][gkey][skey] = [];
+                hier[item.series][item.name || ''][gkey][skey].push({
+                    volume: item.volume || '',
+                    version: item.version || '',
+                    price: item.price || 0
+                });
+            });
+
+            var sortedKeys = function(obj) {
+                return Object.keys(obj).sort(function(a,b){return a.localeCompare(b,'zh-CN');});
+            };
+
+            function setupRowCascades(row) {
+                var seriesSel = row.querySelector('.m_series');
+                sortedKeys(hier).forEach(function(s) {
+                    var o = document.createElement('option'); o.value = s; o.textContent = s; seriesSel.appendChild(o);
+                });
+                seriesSel.addEventListener('change', function() {
+                    var prodSel = row.querySelector('.m_product');
+                    prodSel.innerHTML = '<option value="">选择产品</option>';
+                    var prods = hier[seriesSel.value] || {};
+                    sortedKeys(prods).forEach(function(p) {
+                        var o = document.createElement('option'); o.value = p; o.textContent = p; prodSel.appendChild(o);
+                    });
+                    clearFrom(row, '.m_grade');
+                    updateRowCalc(row);
+                });
+                row.querySelector('.m_product').addEventListener('change', function() {
+                    var prodData = (hier[seriesSel.value] || {})[row.querySelector('.m_product').value] || {};
+                    var gradeSel = row.querySelector('.m_grade');
+                    gradeSel.innerHTML = '<option value="">选择</option>';
+                    sortedKeys(prodData).forEach(function(g) {
+                        var o = document.createElement('option'); o.value = g; o.textContent = g; gradeSel.appendChild(o);
+                    });
+                    clearFrom(row, '.m_subject');
+                    updateRowCalc(row);
+                });
+                row.querySelector('.m_grade').addEventListener('change', function() {
+                    var prodData = (hier[seriesSel.value] || {})[row.querySelector('.m_product').value] || {};
+                    var subjData = prodData[row.querySelector('.m_grade').value] || {};
+                    var subjSel = row.querySelector('.m_subject');
+                    subjSel.innerHTML = '<option value="">选择</option>';
+                    sortedKeys(subjData).forEach(function(s) {
+                        var o = document.createElement('option'); o.value = s; o.textContent = s; subjSel.appendChild(o);
+                    });
+                    clearFrom(row, '.m_volume');
+                    updateRowCalc(row);
+                });
+                row.querySelector('.m_subject').addEventListener('change', function() {
+                    var prodData = (hier[seriesSel.value] || {})[row.querySelector('.m_product').value] || {};
+                    var gradeData = prodData[row.querySelector('.m_grade').value] || {};
+                    var items = gradeData[row.querySelector('.m_subject').value] || [];
+                    var volSel = row.querySelector('.m_volume');
+                    volSel.innerHTML = '<option value="">选择</option>';
+                    var seenV = {};
+                    items.forEach(function(it) { if (!seenV[it.volume]) { seenV[it.volume]=true; var o=document.createElement('option');o.value=it.volume;o.textContent=it.volume;volSel.appendChild(o); } });
+                    updateRowCalc(row);
+                });
+                row.querySelector('.m_volume').addEventListener('change', function() {
+                    var prodData = (hier[seriesSel.value] || {})[row.querySelector('.m_product').value] || {};
+                    var gradeData = prodData[row.querySelector('.m_grade').value] || {};
+                    var items = gradeData[row.querySelector('.m_subject').value] || [];
+                    var vol = row.querySelector('.m_volume').value;
+                    var verSel = row.querySelector('.m_version');
+                    verSel.innerHTML = '<option value="">选择</option>';
+                    items.filter(function(it){return it.volume===vol;}).forEach(function(it){
+                        var o = document.createElement('option'); o.value = it.version; o.textContent = it.version; verSel.appendChild(o);
+                    });
+                    updateRowCalc(row);
+                });
+                row.querySelector('.m_version').addEventListener('change', function() {
+                    var prodData = (hier[seriesSel.value] || {})[row.querySelector('.m_product').value] || {};
+                    var gradeData = prodData[row.querySelector('.m_grade').value] || {};
+                    var items = gradeData[row.querySelector('.m_subject').value] || [];
+                    var vol = row.querySelector('.m_volume').value;
+                    var ver = row.querySelector('.m_version').value;
+                    var match = items.find(function(it){return it.volume===vol && it.version===ver;});
+                    if (match) row.querySelector('.m_price').value = match.price;
+                    updateRowCalc(row);
+                });
+                ['m_studentQty','m_teacherQty','m_price'].forEach(function(cls){
+                    row.querySelector('.'+cls).addEventListener('input', function(){ updateRowCalc(row); });
+                });
+            }
+
+            function clearFrom(row, startCls) {
+                var order = ['m_grade','m_subject','m_volume','m_version'];
+                var found = false;
+                order.forEach(function(cls) {
+                    if (cls === startCls.replace('.','')) found = true;
+                    if (found) {
+                        var el = row.querySelector(startCls.charAt(0)==='.'?'.'+cls:'#'+cls);
+                        if (el && el.tagName === 'SELECT') el.innerHTML = '<option value="">选择</option>';
+                    }
+                });
+            }
+
+            function updateRowCalc(row) {
+                var sq = parseInt(row.querySelector('.m_studentQty').value) || 0;
+                var tq = parseInt(row.querySelector('.m_teacherQty').value) || 0;
+                var tot = sq + tq;
+                var pr = parseFloat(row.querySelector('.m_price').value) || 0;
+                row.querySelector('.m_rowTotal').textContent = tot;
+                row.querySelector('.m_rowAmount').textContent = '¥' + (tot * pr).toFixed(2);
+                updateGrandCalc();
+            }
+
+            function updateGrandCalc() {
+                var rows = document.querySelectorAll('.product-multi-row');
+                var gq = 0, ga = 0;
+                rows.forEach(function(r) {
+                    gq += parseInt(r.querySelector('.m_rowTotal').textContent) || 0;
+                    var at = r.querySelector('.m_rowAmount').textContent.replace('¥','');
+                    ga += parseFloat(at) || 0;
+                });
+                var ge = document.getElementById('m_grandQty');
+                var ae = document.getElementById('m_grandAmt');
+                if (ge) ge.textContent = gq;
+                if (ae) ae.textContent = '¥' + ga.toFixed(2);
+            }
+
+            // Setup first row
+            var firstRow = document.querySelector('.product-multi-row');
+            if (firstRow) setupRowCascades(firstRow);
+
+            // Add product row button
+            var addRowBtn = document.getElementById('m_addProductRow');
+            if (addRowBtn) {
+                addRowBtn.addEventListener('click', function() {
+                    var container = document.getElementById('m_productRows');
+                    var newRow = document.createElement('div');
+                    newRow.className = 'product-multi-row';
+                    newRow.style.cssText = 'border:1px solid #e0e0e0;border-radius:8px;padding:12px;margin-bottom:8px;background:#fafafa;';
+                    newRow.innerHTML = '<div class="form-row">' +
+                        '<div class="form-group"><label>产品系列</label><select class="m_series"><option value="">选择系列</option></select></div>' +
+                        '<div class="form-group"><label>产品名称</label><select class="m_product"><option value="">选择产品</option></select></div>' +
+                        '<div class="form-group"><label>年级</label><select class="m_grade"><option value="">选择</option></select></div>' +
+                        '<div class="form-group"><label>科目</label><select class="m_subject"><option value="">选择</option></select></div>' +
+                        '<div class="form-group"><label>册次</label><select class="m_volume"><option value="">选择</option></select></div>' +
+                        '<div class="form-group"><label>版本</label><select class="m_version"><option value="">选择</option></select></div>' +
+                        '<div class="form-group"><label>定价</label><input type="number" class="m_price" value="0" step="0.01" style="width:80px;"></div></div>' +
+                        '<div class="form-row">' +
+                        '<div class="form-group"><label>学用数量</label><input type="number" class="m_studentQty" value="0" min="0" style="width:80px;"></div>' +
+                        '<div class="form-group"><label>教师学用</label><input type="number" class="m_teacherQty" value="0" min="0" style="width:90px;"></div>' +
+                        '<div class="form-group"><label>教用数量</label><input type="number" class="m_teachingQty" value="0" min="0" style="width:80px;"></div>' +
+                        '<div class="form-group"><label>合计</label><span class="m_rowTotal" style="font-weight:bold;">0</span></div>' +
+                        '<div class="form-group"><label>金额</label><span class="m_rowAmount" style="font-weight:bold;">¥0</span></div>' +
+                        '<div class="form-group"><button type="button" class="btn btn-sm btn-danger m_removeRow">✕</button></div></div>';
+                    container.appendChild(newRow);
+                    setupRowCascades(newRow);
+                    newRow.querySelector('.m_removeRow').addEventListener('click', function() {
+                        if (container.querySelectorAll('.product-multi-row').length <= 1) { alert('至少保留一个产品行'); return; }
+                        newRow.remove();
+                        updateGrandCalc();
+                    });
+                    updateGrandCalc();
+                });
+            }
+
+            // Add company/channel buttons
+            var addCompBtn = document.getElementById('addNewCompany');
+            if (addCompBtn) addCompBtn.addEventListener('click', function() {
+                var n = prompt('请输入新公司名称：'); if (!n||!n.trim()) return;
+                var list = getCompanies(); if (list.indexOf(n.trim())===-1) { list.push(n.trim()); saveCompanies(list); }
+                var sel = document.getElementById('m_orderCompany');
+                var o = document.createElement('option'); o.value = n.trim(); o.textContent = n.trim(); o.selected = true; sel.appendChild(o);
+            });
+            var addChBtn = document.getElementById('addNewChannel');
+            if (addChBtn) addChBtn.addEventListener('click', function() {
+                var n = prompt('请输入新发货渠道：'); if (!n||!n.trim()) return;
+                var list = getChannels(); if (list.indexOf(n.trim())===-1) { list.push(n.trim()); saveChannels(list); }
+                var sel = document.getElementById('m_orderChannel');
+                var o = document.createElement('option'); o.value = n.trim(); o.textContent = n.trim(); o.selected = true; sel.appendChild(o);
+            });
+        }, 100);
+
+        // Confirm button
+        var confirmBtn = document.querySelector('.modal-confirm');
+        if (confirmBtn) {
+            confirmBtn.onclick = function() {
+                var orderTime = document.getElementById('m_orderTime').value || getTodayDate();
+                var company = document.getElementById('m_orderCompany').value.trim();
+                var customer = document.getElementById('m_orderCustomer').value.trim();
+                var school = document.getElementById('m_orderSchool').value.trim();
+                var channel = document.getElementById('m_orderChannel').value.trim();
+                var address = document.getElementById('m_orderAddress').value.trim();
+                var status = document.getElementById('m_orderStatus').value;
+                var remark = document.getElementById('m_orderRemark').value.trim();
+
+                if (!company) { alert('请选择公司'); return; }
+                if (!customer) { alert('请输入客户名称'); return; }
+                if (!school) { alert('请输入学校名称'); return; }
+
+                var rows = document.querySelectorAll('.product-multi-row');
+                var products = [];
+                rows.forEach(function(row) {
+                    var name = row.querySelector('.m_product').value;
+                    if (!name) return;
+                    var sq = parseInt(row.querySelector('.m_studentQty').value) || 0;
+                    var tq = parseInt(row.querySelector('.m_teacherQty').value) || 0;
+                    var tot = sq + tq;
+                    if (tot <= 0) return;
+                    products.push({
+                        series: row.querySelector('.m_series').value,
+                        name: name,
+                        grade: row.querySelector('.m_grade').value,
+                        subject: row.querySelector('.m_subject').value,
+                        volume: row.querySelector('.m_volume').value,
+                        version: row.querySelector('.m_version').value,
+                        price: parseFloat(row.querySelector('.m_price').value) || 0,
+                        studentQty: sq,
+                        teacherQty: tq,
+                        totalQty: tot,
+                        teachingQty: parseInt(row.querySelector('.m_teachingQty').value) || 0,
+                        amount: (tot * (parseFloat(row.querySelector('.m_price').value) || 0)).toFixed(2)
+                    });
+                });
+                if (products.length === 0) { alert('请至少添加一个有效产品行'); return; }
+
+                // Save company
+                var comps = getCompanies();
+                if (company && comps.indexOf(company) === -1) { comps.push(company); saveCompanies(comps); }
+                // Save customer
+                var custs = getCustomers();
+                var cr = custs.find(function(c){return c.name===customer;});
+                if (!cr) {
+                    var cu = getCurrentUser();
+                    cr = { id: 'cust_'+Date.now(), name: customer, schools: school?[school]:[], phone:'', assignedTo: (cu&&cu.role==='推广经理')?(cu.displayName||cu.username):'', orderCount: 0, lastOrderTime: orderTime };
+                    custs.push(cr);
+                } else {
+                    if (school && (cr.schools||[]).indexOf(school)<0) { if(!cr.schools)cr.schools=[]; cr.schools.push(school); }
+                    cr.lastOrderTime = orderTime;
+                }
+                saveCustomers(custs);
+
+                // Create orders
+                var allOrders = JSON.parse(localStorage.getItem('orders') || '[]');
+                var added = 0;
+                products.forEach(function(prod) {
+                    var order = {
+                        id: 'o_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),
+                        orderTime: orderTime,
+                        company: company, customer: customer, school: school,
+                        series: prod.series, name: prod.name, grade: prod.grade,
+                        subject: prod.subject, volume: prod.volume, version: prod.version,
+                        price: prod.price,
+                        studentQty: prod.studentQty, teacherQty: prod.teacherQty,
+                        totalQty: prod.totalQty, amount: prod.amount,
+                        teachingQty: prod.teachingQty,
+                        channel: channel, address: address,
+                        status: status || '待发货',
+                        shippingStatus: '未发货',
+                        remark: remark,
+                        createdBy: getCurrentUser() ? getCurrentUser().username : '',
+                        createdAt: new Date().toISOString()
+                    };
+                    allOrders.push(order);
+                    if (window.BitableAPI) { window.BitableAPI.createOrder(order).catch(function(){}); }
+                    added++;
+                });
+                localStorage.setItem('orders', JSON.stringify(allOrders));
+                alert('报单添加成功！共 ' + added + ' 个产品');
+                window.closeModal();
+                updateInventoryFromOrders();
+                renderOrdersTable();
+                renderCustomersTable();
+                renderDashboard();
+            };
+        }
+    };
+
+    // ==================== 册次报订间隔设置 ====================
+    function getVolumeIntervals() {
+        return JSON.parse(localStorage.getItem('volumeIntervals') || '[]');
+    }
+    function saveVolumeIntervals(list) {
+        localStorage.setItem('volumeIntervals', JSON.stringify(list));
+    }
+
+    function renderVolumeIntervals() {
+        var tbody = document.getElementById('volumeIntervalTableBody');
+        if (!tbody) return;
+        var intervals = getVolumeIntervals();
+        if (intervals.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;">暂无间隔设置</td></tr>';
+            return;
+        }
+        tbody.innerHTML = intervals.map(function(vi) {
+            return '<tr>' +
+                '<td>' + (vi.school || '全部学校') + '</td>' +
+                '<td>' + (vi.series || '全部系列') + '</td>' +
+                '<td>' + (vi.product || '全部产品') + '</td>' +
+                '<td>' + (vi.subject || '全部科目') + '</td>' +
+                '<td>' + vi.days + ' 天</td>' +
+                '<td>' + (vi.isDefault ? '✅ 是' : '否') + '</td>' +
+                '<td>' + (vi.note || '-') + '</td>' +
+                '<td><button class="btn-icon" onclick="window.editVolumeInterval(\'' + vi.id + '\')">✏️</button><button class="btn-icon" onclick="window.deleteVolumeInterval(\'' + vi.id + '\')">🗑️</button></td></tr>';
+        }).join('');
+    }
+
+    // Add volume interval button
+    var addVIbtn = document.getElementById('addVolumeInterval');
+    if (addVIbtn) {
+        addVIbtn.addEventListener('click', function() {
+            var customers = getCustomers();
+            var schools = [];
+            customers.forEach(function(c) { if (c.schools) c.schools.forEach(function(s) { if (schools.indexOf(s)<0) schools.push(s); }); });
+            schools.sort(function(a,b){return a.localeCompare(b,'zh-CN');});
+            var body = '<div class="form-group"><label>学校</label><select id="viSchool"><option value="">全部学校（默认规则）</option>' +
+                schools.map(function(s){return '<option value="'+s+'">'+s+'</option>';}).join('') + '</select></div>';
+            body += '<div class="form-group"><label>产品系列</label><select id="viSeries"><option value="">全部系列</option></select></div>';
+            body += '<div class="form-group"><label>产品名称</label><select id="viProduct"><option value="">全部产品</option></select></div>';
+            body += '<div class="form-group"><label>科目</label><select id="viSubject"><option value="">全部科目</option></select></div>';
+            body += '<div class="form-group"><label>间隔天数 <span style="color:red;">*</span></label><input type="number" id="viDays" value="45" min="1" style="width:100px;"></div>';
+            body += '<div class="form-group"><label>设为默认规则</label><label style="margin-left:8px;"><input type="checkbox" id="viIsDefault"> 是（优先级最低）</label></div>';
+            body += '<div class="form-group"><label>备注</label><input type="text" id="viNote" placeholder="可选">';
+            window.openModal('添加册次间隔规则', body);
+            var confirmBtn = document.querySelector('.modal-confirm');
+            if (confirmBtn) {
+                confirmBtn.onclick = function() {
+                    var days = parseInt(document.getElementById('viDays').value) || 45;
+                    var intervals = getVolumeIntervals();
+                    intervals.push({
+                        id: 'vi_'+Date.now(),
+                        school: document.getElementById('viSchool').value,
+                        series: document.getElementById('viSeries').value,
+                        product: document.getElementById('viProduct').value,
+                        subject: document.getElementById('viSubject').value,
+                        days: days,
+                        isDefault: document.getElementById('viIsDefault').checked,
+                        note: document.getElementById('viNote').value
+                    });
+                    saveVolumeIntervals(intervals);
+                    window.closeModal();
+                    renderVolumeIntervals();
+                };
+            }
+        });
+    }
+
+    window.editVolumeInterval = function(id) {
+        var intervals = getVolumeIntervals();
+        var vi = intervals.find(function(v){return v.id===id;});
+        if (!vi) return;
+        var body = '<div class="form-group"><label>学校</label><input type="text" id="viSchool" value="'+ (vi.school||'') +'"></div>';
+        body += '<div class="form-group"><label>间隔天数</label><input type="number" id="viDays" value="'+ vi.days +'" min="1"></div>';
+        body += '<div class="form-group"><label>备注</label><input type="text" id="viNote" value="'+ (vi.note||'') +'"></div>';
+        window.openModal('编辑间隔规则', body);
+        var confirmBtn = document.querySelector('.modal-confirm');
+        if (confirmBtn) {
+            confirmBtn.onclick = function() {
+                vi.school = document.getElementById('viSchool').value;
+                vi.days = parseInt(document.getElementById('viDays').value) || vi.days;
+                vi.note = document.getElementById('viNote').value;
+                saveVolumeIntervals(intervals);
+                window.closeModal();
+                renderVolumeIntervals();
+            };
+        }
+    };
+
+    window.deleteVolumeInterval = function(id) {
+        if (!confirm('确定删除该间隔规则？')) return;
+        var intervals = getVolumeIntervals().filter(function(v){return v.id!==id;});
+        saveVolumeIntervals(intervals);
+        renderVolumeIntervals();
+    };
+
+    // Initialize volume intervals on settings page load
+    var settingsPage = document.getElementById('settingsPage');
+    if (settingsPage) {
+        var settingsObserver = new MutationObserver(function() {
+            if (settingsPage.classList.contains('active')) {
+                renderVolumeIntervals();
+            }
+        });
+        settingsObserver.observe(settingsPage, { attributes: true, attributeFilter: ['class'] });
+    }
+
+    // ==================== 报订规律分析 ====================
+    var analyzeBtn = document.getElementById('analyzePatternBtn');
+    if (analyzeBtn) {
+        analyzeBtn.addEventListener('click', function() {
+            var orders = JSON.parse(localStorage.getItem('orders') || '[]');
+            if (orders.length === 0) { alert('暂无报单数据'); return; }
+            
+            var intervals = getVolumeIntervals();
+            // Build lookup: school -> key -> days
+            var intervalMap = {};
+            intervals.forEach(function(vi) {
+                var sch = vi.school || '';
+                var key = (vi.series||'') + '|' + (vi.product||'') + '|' + (vi.subject||'');
+                if (!intervalMap[sch]) intervalMap[sch] = {};
+                intervalMap[sch][key] = vi.days;
+            });
+
+            // Group orders by school + series + product + subject + volume
+            var patterns = {};
+            orders.forEach(function(o) {
+                var sch = o.school || '未知学校';
+                var key = sch + '|' + (o.series||'') + '|' + (o.name||'') + '|' + (o.subject||'') + '|' + (o.volume||'');
+                if (!patterns[key]) patterns[key] = { school: sch, series: o.series, product: o.name, subject: o.subject, volume: o.volume, dates: [], qty: 0 };
+                patterns[key].dates.push(o.orderTime || '');
+                patterns[key].qty += (o.totalQty || ((o.studentQty||0)+(o.teacherQty||0)));
+            });
+
+            // Calculate average intervals
+            var results = [];
+            Object.keys(patterns).forEach(function(key) {
+                var p = patterns[key];
+                p.dates.sort();
+                var intervals_days = [];
+                for (var i = 1; i < p.dates.length; i++) {
+                    var d1 = new Date(p.dates[i-1]);
+                    var d2 = new Date(p.dates[i]);
+                    if (!isNaN(d1) && !isNaN(d2)) {
+                        intervals_days.push(Math.round((d2 - d1) / 86400000));
+                    }
+                }
+                var avgInterval = 0;
+                if (intervals_days.length > 0) {
+                    avgInterval = Math.round(intervals_days.reduce(function(a,b){return a+b;},0) / intervals_days.length);
+                }
+                // Find configured interval
+                var intKey = (p.series||'') + '|' + (p.product||'') + '|' + (p.subject||'');
+                var configDays = (intervalMap[p.school] && intervalMap[p.school][intKey]) || 
+                                (intervalMap[''] && intervalMap[''][intKey]) || 45;
+                // Predict next order
+                var lastDate = p.dates.length > 0 ? new Date(p.dates[p.dates.length-1]) : new Date();
+                var nextPred = new Date(lastDate.getTime() + avgInterval * 86400000);
+                var daysUntil = Math.round((nextPred - new Date()) / 86400000);
+                var status = daysUntil < 0 ? '已逾期' : (daysUntil <= 7 ? '即将到期' : (daysUntil <= 30 ? '预警' : '正常'));
+
+                results.push({
+                    school: p.school,
+                    series: p.series,
+                    product: p.product,
+                    subject: p.subject,
+                    volume: p.volume,
+                    orderCount: p.dates.length,
+                    totalQty: p.qty,
+                    avgInterval: avgInterval,
+                    configDays: configDays,
+                    lastOrder: p.dates[p.dates.length-1],
+                    nextPred: nextPred.toISOString().slice(0,10),
+                    daysUntil: daysUntil,
+                    status: status
+                });
+            });
+
+            // Sort by urgency
+            results.sort(function(a,b){ return a.daysUntil - b.daysUntil; });
+
+            var resultDiv = document.getElementById('orderingPatternResult');
+            if (!resultDiv) return;
+
+            var html = '<div style="margin-bottom:12px;display:flex;gap:12px;flex-wrap:wrap;">' +
+                '<div class="stat-card" style="flex:1;min-width:120px;"><h4>分析对象</h4><p style="font-size:20px;font-weight:bold;">' + results.length + '</p><small>报订规律条目</small></div>' +
+                '<div class="stat-card" style="flex:1;min-width:120px;"><h4>已逾期</h4><p style="font-size:20px;font-weight:bold;color:#dc3545;">' + results.filter(function(r){return r.status==='已逾期';}).length + '</p><small>需立即跟进</small></div>' +
+                '<div class="stat-card" style="flex:1;min-width:120px;"><h4>即将到期</h4><p style="font-size:20px;font-weight:bold;color:#ffc107;">' + results.filter(function(r){return r.status==='即将到期';}).length + '</p><small>7天内到期</small></div>' +
+                '<div class="stat-card" style="flex:1;min-width:120px;"><h4>预警</h4><p style="font-size:20px;font-weight:bold;color:#fd7e14;">' + results.filter(function(r){return r.status==='预警';}).length + '</p><small>30天内到期</small></div></div>';
+
+            html += '<table class="data-table" style="font-size:12px;"><thead><tr><th>学校</th><th>系列</th><th>产品</th><th>科目</th><th>册次</th><th>报单次数</th><th>平均间隔(天)</th><th>设定间隔</th><th>最近报单</th><th>预计下次</th><th>距今天数</th><th>状态</th></tr></thead><tbody>';
+            results.forEach(function(r) {
+                var statusCls = r.status === '已逾期' ? '#dc3545' : (r.status === '即将到期' ? '#ffc107' : (r.status === '预警' ? '#fd7e14' : '#28a745'));
+                html += '<tr>' +
+                    '<td>' + r.school + '</td><td>' + (r.series||'-') + '</td><td>' + (r.product||'-') + '</td>' +
+                    '<td>' + (r.subject||'-') + '</td><td>' + (r.volume||'-') + '</td>' +
+                    '<td>' + r.orderCount + '</td>' +
+                    '<td>' + (r.avgInterval||'--') + '</td>' +
+                    '<td>' + r.configDays + '</td>' +
+                    '<td>' + (r.lastOrder||'-') + '</td>' +
+                    '<td>' + r.nextPred + '</td>' +
+                    '<td style="color:' + (r.daysUntil<0?'#dc3545':'') + ';">' + r.daysUntil + '</td>' +
+                    '<td><span style="color:' + statusCls + ';font-weight:bold;">' + r.status + '</span></td>' +
+                    '</tr>';
+            });
+            html += '</tbody></table>';
+            resultDiv.innerHTML = html;
+        });
+    }
+
 
     console.log('系统初始化完成！');
 });

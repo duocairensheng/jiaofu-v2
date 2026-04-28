@@ -71,8 +71,8 @@
                 <input type="text" class="search-box" placeholder="搜索产品名称、系列..." id="inventorySearch">
             </div>
             <table class="data-table" id="inventoryTable">
-                <thead><tr><th>产品系列</th><th>产品名称</th><th>年级</th><th>科目</th><th>册次</th><th>版本</th><th>定价</th><th>库存数量</th><th>理论库存</th><th>实际库存</th><th>差异</th><th>状态</th><th>操作</th></tr></thead>
-                <tbody id="inventoryTableBody"><tr><td colspan="13" style="text-align:center;color:#999;">暂无库存数据</td></tr></tbody>
+                <thead><tr><th>产品系列</th><th>产品名称</th><th>年级</th><th>科目</th><th>册次</th><th>版本</th><th>定价</th><th>库存数量</th><th>理论库存</th><th>实际库存</th><th>差异</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead>
+                <tbody id="inventoryTableBody"><tr><td colspan="14" style="text-align:center;color:#999;">暂无库存数据</td></tr></tbody>
             </table>
         </div>
         <div id="ordersPage" class="page">
@@ -92,7 +92,7 @@
                 <input type="text" class="search-box" placeholder="搜索客户、学校、产品..." id="orderSearch">
             </div>
             <table class="data-table" id="ordersTable">
-                <thead><tr><th>报单时间</th><th>公司名称</th><th>客户名称</th><th>学校名称</th><th>产品系列</th><th>产品名称</th><th>年级</th><th>科目</th><th>册次</th><th>版本</th><th>定价</th><th>学用数量</th><th>教师学用数量</th><th>合计数量</th><th>教用数量</th><th>金额</th><th>发货渠道</th><th>发货地址</th><th>发货状态</th><th>操作</th></tr></thead>
+                <thead><tr><th>报单时间</th><th>公司名称</th><th>客户名称</th><th>学校名称</th><th>产品系列</th><th>产品名称</th><th>年级</th><th>科目</th><th>册次</th><th>版本</th><th>定价</th><th>学用数量</th><th>教师学用数量</th><th>合计数量</th><th>教用数量</th><th>金额</th><th>发货渠道</th><th>发货地址</th><th>发货状态</th><th>备注</th><th>操作</th></tr></thead>
                 <tbody id="ordersTableBody"><tr><td colspan="20" style="text-align:center;color:#999;">暂无报单数据</td></tr></tbody>
             </table>
         </div>
@@ -157,6 +157,23 @@
                     <button class="btn btn-primary" id="exportDataBtn">导出数据</button>
                     <button class="btn btn-danger" id="clearDataBtn">清空本地数据</button>
                 </div>
+            </div>
+            <div class="settings-section">
+                <h3>册次报订间隔设置</h3>
+                <p style="color:#666;font-size:13px;margin-bottom:8px;">设定不同学校、不同产品的册次报订间隔天数，系统将根据此规则生成报订提醒</p>
+                <table class="data-table" id="volumeIntervalTable">
+                    <thead><tr><th>学校</th><th>产品系列</th><th>产品名称</th><th>科目</th><th>间隔天数</th><th>默认规则</th><th>备注</th><th>操作</th></tr></thead>
+                    <tbody id="volumeIntervalTableBody"><tr><td colspan="8" style="text-align:center;color:#999;">暂无间隔设置</td></tr></tbody>
+                </table>
+                <button class="btn btn-primary" id="addVolumeInterval">+ 添加间隔规则</button>
+            </div>
+            <div class="settings-section">
+                <h3>报订规律分析</h3>
+                <p style="color:#666;font-size:13px;margin-bottom:8px;">基于历史报单数据分析各学校的报订规律，生成报订提醒参考</p>
+                <div id="orderingPatternResult" style="margin-top:8px;">
+                    <p style="color:#999;">点击"分析"按钮开始</p>
+                </div>
+                <button class="btn btn-primary" id="analyzePatternBtn">分析报订规律</button>
             </div>
             <div class="settings-section">
                 <h3>提醒设置</h3>

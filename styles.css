@@ -165,3 +165,21 @@ input[readonly] { background: #f8f9fa; color: #666; cursor: default; }
 /* ===== 报单导出按钮 ===== */
 .btn-export { background: #722ed1; color: white; }
 .btn-export:hover { background: #531dab; }
+
+/* ===== 多产品报单行 ===== */
+.product-multi-row { transition: all 0.2s; }
+.product-multi-row:hover { border-color: #667eea !important; background: #f0f4ff !important; }
+.product-multi-row .form-group { margin-bottom: 8px; }
+.product-multi-row .form-group label { font-size: 11px; color: #888; }
+.m_rowTotal, .m_rowAmount { display: inline-block; min-width: 50px; text-align: center; padding: 6px 8px; background: #e8ecff; border-radius: 4px; font-size: 13px; }
+.m_rowAmount { background: #e6f7ed; color: #28a745; }
+
+/* ===== 库存子分类行 ===== */
+.subcat-toggle-row:hover td { background: #e8ecff !important; }
+.subcat-detail-row:hover td { background: #e0e8ff !important; }
+.subcat-detail-row .btn-icon { color: #dc3545; opacity: 0.5; transition: opacity 0.2s; }
+.subcat-detail-row:hover .btn-icon { opacity: 1; }
+
+/* ===== 报单规律分析状态 ===== */
+#orderingPatternResult .data-table { font-size: 12px; }
+#orderingPatternResult .stat-card { min-width: 120px; flex: 1; }

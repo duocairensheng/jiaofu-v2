@@ -892,23 +892,72 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    // Levenshtein distance for fuzzy matching
+    function levenshtein(a, b) {
+        if (a.length === 0) return b.length;
+        if (b.length === 0) return a.length;
+        var matrix = [];
+        for (var i = 0; i <= b.length; i++) matrix[i] = [i];
+        for (var j = 0; j <= a.length; j++) matrix[0][j] = j;
+        for (var i = 1; i <= b.length; i++) {
+            for (var j = 1; j <= a.length; j++) {
+                if (b.charAt(i-1) === a.charAt(j-1)) matrix[i][j] = matrix[i-1][j-1];
+                else matrix[i][j] = Math.min(matrix[i-1][j-1]+1, matrix[i][j-1]+1, matrix[i-1][j]+1);
+            }
+        }
+        return matrix[b.length][a.length];
+    }
+    function fuzzySimilarity(s1, s2) {
+        if (!s1 || !s2) return 0;
+        var dist = levenshtein(s1, s2);
+        var maxLen = Math.max(s1.length, s2.length);
+        return maxLen === 0 ? 1 : 1 - dist / maxLen;
+    }
+    function fuzzyMatchInventory(text) {
+        var inventory = getInventoryData();
+        if (inventory.length === 0) return null;
+        var best = null;
+        var bestScore = 0;
+        inventory.forEach(function(item) {
+            var name = (item.name || '');
+            if (text.indexOf(name) >= 0) { best = item; bestScore = 1.0; return; }
+            var score = fuzzySimilarity(text, name);
+            var parts = name.replace(/[\(\)\(\)]/g, ' ').split(/\s+/).filter(function(p){return p.length>1;});
+            parts.forEach(function(part) {
+                var ps = fuzzySimilarity(text, part);
+                score = Math.max(score, ps);
+            });
+            if (score > bestScore && score > 0.4) { best = item; bestScore = score; }
+        });
+        return best ? { item: best, confidence: bestScore } : null;
+    }
     function parseOCRText(text) {
         var data = { company: '', customer: '', school: '', series: '', name: '', subject: '', volume: '', version: '', price: 0, quantity: 0, teachingQty: 0, channel: '', address: '' };
         var lines = text.split('\n');
+        var rawProductName = '';
         lines.forEach(function(line) {
             var l = line.trim();
             if (!l) return;
-            if (l.includes('公司')) data.company = l.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '').substring(0, 20);
-            else if (l.includes('客户')) data.customer = l.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '').substring(0, 20);
-            else if (l.includes('学校')) data.school = l.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '').substring(0, 30);
-            else if (l.includes('产品') || l.includes('书名')) data.name = l.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '').substring(0, 50);
-            else if (l.includes('系列')) data.series = l.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '').substring(0, 20);
-            else if (l.match(/\d+\.?\d*/) && l.includes('元')) { var pm = l.match(/(\d+\.?\d*)/); if (pm) data.price = parseFloat(pm[1]); }
-            else if (l.match(/\d+/) && (l.includes('册') || l.includes('本'))) { var qm = l.match(/(\d+)/); if (qm) data.quantity = parseInt(qm[1]); }
+            if (l.includes('\u516c\u53f8')) data.company = l.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '').substring(0, 20);
+            else if (l.includes('\u5ba2\u6237')) data.customer = l.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '').substring(0, 20);
+            else if (l.includes('\u5b66\u6821')) data.school = l.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '').substring(0, 30);
+            else if (l.includes('\u4ea7\u54c1') || l.includes('\u4e66\u540d')) { rawProductName = l.replace(/[^\u4e00-\u9fa5a-zA-Z0-9\(\)\\(\\)\(\)]/g, '').substring(0, 50); data.name = rawProductName; }
+            else if (l.includes('\u7cfb\u5217')) data.series = l.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '').substring(0, 20);
+            else if (l.match(/\d+\.?\d*/) && l.includes('\u5143')) { var pm = l.match(/(\d+\.?\d*)/); if (pm) data.price = parseFloat(pm[1]); }
+            else if (l.match(/\d+/) && (l.includes('\u518c') || l.includes('\u672c'))) { var qm = l.match(/(\d+)/); if (qm) data.quantity = parseInt(qm[1]); }
         });
+        if (rawProductName) {
+            var match = fuzzyMatchInventory(rawProductName);
+            if (match) {
+                data._fuzzyMatch = match;
+                if (!data.series) data.series = match.item.series || '';
+                if (!data.name || data.name !== match.item.name) data.name = match.item.name || '';
+                if (!data.price) data.price = match.item.price || 0;
+                data._source = match.item;
+            }
+        }
         return data;
     }
-
     function openOCRResultForm(data) {
         var companies = getCompanies();
         var channels = getChannels();
@@ -921,19 +970,97 @@ document.addEventListener('DOMContentLoaded', function() {
             return '<option value="' + c + '"' + sel + '>' + c + '</option>';
         }).join('');
 
+        // Build fuzzy match hint
+        var fuzzyHint = '';
+        if (data._fuzzyMatch) {
+            var conf = Math.round(data._fuzzyMatch.confidence * 100);
+            var confColor = conf >= 80 ? '#28a745' : (conf >= 60 ? '#fd7e14' : '#dc3545');
+            var invItem = data._fuzzyMatch.item;
+            fuzzyHint = '<div class="ocr-hint" style="background:#e6f7ed;border:1px solid #28a745;">' +
+                '自动匹配到库存产品：<b>' + (invItem.name || '') + '</b> ' +
+                '(' + (invItem.grade || '') + ' | ' + (invItem.subject || '') + ' | ' + (invItem.volume || '') + ' | ' + (invItem.version || '') + ') ' +
+                '定价: ¥' + (invItem.price || 0).toFixed(2) + ' | 匹配置信度: <b style="color:' + confColor + ';">' + conf + '%</b>' +
+                '</div>';
+        } else {
+            fuzzyHint = '<div class="ocr-hint" style="background:#fff3cd;border:1px solid #ffc107;">' +
+                '未匹配到库存产品，请手动选择或输入</div>';
+        }
+        // Build inventory product options for dropdown
+        var inventory = getInventoryData();
+        var invOpts = '<option value="">手动输入</option>';
+        var seenProducts = {};
+        inventory.forEach(function(item) {
+            var key = item.name + '|' + (item.grade||'') + '|' + (item.subject||'');
+            if (!seenProducts[key]) {
+                seenProducts[key] = true;
+                var sel = (data._source && data._source.name === item.name && data._source.grade === item.grade) ? ' selected' : '';
+                invOpts += '<option value="' + key + '"' + sel + '>' + item.name + ' (' + (item.grade||'') + ' ' + (item.subject||'') + ' ' + (item.volume||'') + ')</option>';
+            }
+        });
+
+        // Build subject/volume/version options if matched
+        var srcItem = data._source;
+        var subjectOpts = '<option value="">选择</option>';
+        var volumeOpts = '<option value="">选择</option>';
+        var versionOpts = '<option value="">选择</option>';
+        if (srcItem) {
+            var sameProducts = inventory.filter(function(it){ return it.name === srcItem.name && it.grade === srcItem.grade; });
+            var seenS = {}, seenV = {}, seenVer = {};
+            sameProducts.forEach(function(it) {
+                if (it.subject && !seenS[it.subject]) { seenS[it.subject]=true; subjectOpts += '<option value="'+it.subject+'"'+(it.subject===srcItem.subject?' selected':'')+'>'+it.subject+'</option>'; }
+                if (it.volume && !seenV[it.volume]) { seenV[it.volume]=true; volumeOpts += '<option value="'+it.volume+'"'+(it.volume===srcItem.volume?' selected':'')+'>'+it.volume+'</option>'; }
+                if (it.version && !seenVer[it.version]) { seenVer[it.version]=true; versionOpts += '<option value="'+it.version+'"'+(it.version===srcItem.version?' selected':'')+'>'+it.version+'</option>'; }
+            });
+        }
+
         var formHTML =
             '<form id="ocrOrderForm">' +
-            '<p class="ocr-hint">图片识别结果可能不准确，请仔细核对后提交！</p>' +
+            fuzzyHint +
             '<div class="form-row"><div class="form-group"><label>公司</label><select name="company" required><option value="">请选择</option>' + coOpts + '</select></div><div class="form-group"><label>客户名称</label><input type="text" name="customer" value="' + (data.customer || '') + '" required></div></div>' +
             '<div class="form-group"><label>学校名称</label><input type="text" name="school" value="' + (data.school || '') + '" required></div>' +
-            '<div class="form-row"><div class="form-group"><label>产品系列</label><input type="text" name="series" value="' + (data.series || '') + '"></div><div class="form-group"><label>产品名称</label><input type="text" name="name" value="' + (data.name || '') + '"></div></div>' +
-            '<div class="form-row"><div class="form-group"><label>科目</label><input type="text" name="subject" value="' + (data.subject || '') + '"></div><div class="form-group"><label>册次</label><input type="text" name="volume" value="' + (data.volume || '') + '"></div></div>' +
-            '<div class="form-row"><div class="form-group"><label>版本</label><input type="text" name="version" value="' + (data.version || '') + '"></div><div class="form-group"><label>定价</label><input type="number" step="0.01" name="price" value="' + (data.price || '') + '"></div></div>' +
-            '<div class="form-row"><div class="form-group"><label>数量</label><input type="number" name="quantity" value="' + (data.quantity || '') + '"></div><div class="form-group"><label>教用数量</label><input type="number" name="teachingQty" value="' + (data.teachingQty || 0) + '"></div></div>' +
+            '<div class="form-section-title">产品信息 <span class="hint">（从库存匹配或手动选择）</span></div>' +
+            '<div class="form-group"><label>产品名称</label><select name="productKey" id="ocrProductSelect" onchange="window.ocrOnProductChange()">' + invOpts + '</select></div>' +
+            '<div class="form-row"><div class="form-group"><label>产品系列</label><input type="text" name="series" id="ocrSeries" value="' + (data.series || '') + '" placeholder="自动填充"></div><div class="form-group"><label>科目</label><select name="subject" id="ocrSubject">' + subjectOpts + '</select></div></div>' +
+            '<div class="form-row"><div class="form-group"><label>册次</label><select name="volume" id="ocrVolume">' + volumeOpts + '</select></div><div class="form-group"><label>版本</label><select name="version" id="ocrVersion">' + versionOpts + '</select></div>' +
+            '<div class="form-group"><label>定价</label><input type="number" step="0.01" name="price" id="ocrPrice" value="' + (data.price || '') + '"></div></div>' +
+            '<div class="form-section-title">数量与发货信息</div>' +
+            '<div class="form-row"><div class="form-group"><label>学用数量</label><input type="number" name="studentQty" id="ocrStudentQty" value="' + (data.quantity || 1) + '" min="0"></div><div class="form-group"><label>教师学用</label><input type="number" name="teacherQty" id="ocrTeacherQty" value="0" min="0"></div></div>' +
+            '<div class="form-row"><div class="form-group"><label>教用数量</label><input type="number" name="teachingQty" value="' + (data.teachingQty || 0) + '"></div><div class="form-group"><label>发货状态</label><select name="status"><option value="待发货" selected>待发货</option><option value="已报">已报</option><option value="等通知发货">等通知发货</option></select></div></div>' +
             '<div class="form-row"><div class="form-group"><label>发货渠道</label><select name="channel">' + chOpts + '</select></div><div class="form-group"><label>发货地址</label><input type="text" name="address" value="' + (data.address || '') + '"></div></div>' +
+            '<div class="form-group"><label>备注</label><input type="text" name="remark" placeholder="备注">' +
             '</form>';
 
         openModal('OCR 识别结果 - 请核对', formHTML);
+
+        // OCR product select change handler
+        window.ocrOnProductChange = function() {
+            var sel = document.getElementById('ocrProductSelect');
+            if (!sel || !sel.value) return;
+            var parts = sel.value.split('|');
+            var inv = getInventoryData();
+            var match = inv.find(function(it){ return it.name === parts[0] && it.grade === parts[1] && it.subject === parts[2]; });
+            if (!match) return;
+            // Auto-fill fields
+            var seriesEl = document.getElementById('ocrSeries');
+            var subjectEl = document.getElementById('ocrSubject');
+            var volumeEl = document.getElementById('ocrVolume');
+            var versionEl = document.getElementById('ocrVersion');
+            var priceEl = document.getElementById('ocrPrice');
+            if (seriesEl) seriesEl.value = match.series || '';
+            if (subjectEl) { subjectEl.innerHTML = '<option value="'+match.subject+'">'+match.subject+'</option>'; subjectEl.value = match.subject; }
+            if (volumeEl) { volumeEl.innerHTML = '<option value="'+match.volume+'">'+match.volume+'</option>'; volumeEl.value = match.volume; }
+            if (versionEl) { 
+                // Show all versions for this product
+                var sameProducts = inv.filter(function(it){ return it.name === match.name && it.grade === match.grade && it.subject === match.subject; });
+                versionEl.innerHTML = '';
+                var seenVer = {};
+                sameProducts.forEach(function(it) {
+                    if (it.version && !seenVer[it.version]) { seenVer[it.version]=true; var o=document.createElement('option');o.value=it.version;o.textContent=it.version;versionEl.appendChild(o); }
+                });
+                versionEl.value = match.version;
+            }
+            if (priceEl) priceEl.value = match.price || 0;
+        };
 
         var confirmBtn = modal.querySelector('.modal-confirm');
         confirmBtn.onclick = null;
@@ -941,20 +1068,36 @@ document.addEventListener('DOMContentLoaded', function() {
             var form = document.getElementById('ocrOrderForm');
             var fd = new FormData(form);
             var dat = Object.fromEntries(fd);
+            // Handle product select → extract name/grade/subject
+            if (dat.productKey) {
+                var parts = dat.productKey.split('|');
+                dat.name = parts[0] || '';
+                dat.grade = parts[1] || '';
+            }
+            delete dat.productKey;
+            dat.studentQty = parseInt(dat.studentQty || 0);
+            dat.teacherQty = parseInt(dat.teacherQty || 0);
+            dat.totalQty = dat.studentQty + dat.teacherQty;
             dat.price = parseFloat(dat.price) || 0;
-            dat.quantity = parseInt(dat.quantity) || 0;
             dat.teachingQty = parseInt(dat.teachingQty) || 0;
-            dat.amount = (dat.price * dat.quantity).toFixed(2);
-            dat.status = '待发货';
-
-            var orders = JSON.parse(localStorage.getItem('orders') || '[]');
+            dat.amount = (dat.price * dat.totalQty).toFixed(2);
             dat.id = Date.now() + Math.random();
             dat.orderTime = getTodayDate();
+            dat.shippingStatus = (dat.status === '已发货') ? '已发货' : '未发货';
+
+            if (!dat.company) { alert('请选择公司'); return; }
+            if (!dat.customer) { alert('请输入客户名称'); return; }
+            if (!dat.school) { alert('请输入学校名称'); return; }
+            if (!dat.name) { alert('请选择或输入产品'); return; }
+            if (dat.totalQty <= 0) { alert('请输入有效数量'); return; }
+
+            var orders = JSON.parse(localStorage.getItem('orders') || '[]');
             orders.push(dat);
             localStorage.setItem('orders', JSON.stringify(orders));
             if (window.BitableAPI) { window.BitableAPI.createOrder(dat).catch(function(e){ console.error(e); }); }
             alert('报单添加成功！');
             closeModal();
+            updateInventoryFromOrders();
             renderOrdersTable();
             renderDashboard();
         };
@@ -2348,6 +2491,196 @@ document.addEventListener('DOMContentLoaded', function() {
             resultDiv.innerHTML = html;
         });
     }
+
+
+
+    // ==================== 飞书企业架构同步 ====================
+    window.syncFeishuOrg = function() {
+        var cfg = window.FEISHU_BITABLE || JSON.parse(localStorage.getItem('feishuConfig') || '{}');
+        if (!cfg.appId || !cfg.appSecret) { alert('请先在设置页配置飞书 App ID 和 App Secret'); return; }
+        var proxyUrl = (cfg.proxyUrl || localStorage.getItem('proxyUrl') || '');
+        if (!proxyUrl) { alert('请先在设置页配置 CORS 代理地址'); return; }
+
+        // Role mapping rules
+        var roleMapping = {
+            'regional_manager': { keywords: ['区总', '区域', '区域经理', '大区'], deptLevel: 1 },
+            'promotion_manager': { keywords: ['推广', '经理', '销售', '业务'], deptLevel: 2 },
+            'customer_service': { keywords: ['客服', '售后', '服务', '支持'], deptLevel: 3 },
+            'admin': { keywords: ['管理员', 'admin', '系统'], deptLevel: 0 }
+        };
+
+        function guessRole(deptName, userName, isDeptLeader) {
+            var name = (deptName + ' ' + userName).toLowerCase();
+            if (isDeptLeader) {
+                // Department leaders get at least promotion_manager
+                if (name.includes('区域') || name.includes('大区')) return 'regional_manager';
+                if (name.includes('总') || name.includes('总监')) return 'regional_manager';
+                return 'promotion_manager';
+            }
+            if (name.includes('管理员') || name.includes('admin')) return 'admin';
+            if (name.includes('区域') || name.includes('大区')) return 'regional_manager';
+            if (name.includes('推广') || name.includes('销售') || name.includes('业务')) return 'promotion_manager';
+            if (name.includes('客服') || name.includes('售后') || name.includes('支持')) return 'customer_service';
+            return 'promotion_manager'; // default
+        }
+
+        function getDeptAndUsers(token, pageToken) {
+            return fetch(proxyUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: 'https://open.feishu.cn/open-apis/contact/v3/departments' +
+                        '?page_size=50' + (pageToken ? '&page_token=' + pageToken : ''),
+                    method: 'GET',
+                    headers: { 'Authorization': 'Bearer ' + token }
+                })
+            }).then(function(r) { return r.json(); });
+        }
+
+        function getDeptUsers(token, deptId, pageToken) {
+            return fetch(proxyUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: 'https://open.feishu.cn/open-apis/contact/v3/users/find_by_department' +
+                        '?department_id=' + deptId + '&page_size=50' + (pageToken ? '&page_token=' + pageToken : ''),
+                    method: 'GET',
+                    headers: { 'Authorization': 'Bearer ' + token }
+                })
+            }).then(function(r) { return r.json(); });
+        }
+
+        // Simplified: just list all users (no pagination complexity for demo)
+        function getAllUsers(token, pageToken) {
+            return fetch(proxyUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: 'https://open.feishu.cn/open-apis/contact/v3/users' +
+                        '?page_size=50&user_id_type=open_id&department_id_type=open_department_id' +
+                        (pageToken ? '&page_token=' + pageToken : ''),
+                    method: 'GET',
+                    headers: { 'Authorization': 'Bearer ' + token }
+                })
+            }).then(function(r) { return r.json(); });
+        }
+
+        // Show loading
+        var body = '<div style="text-align:center;padding:20px;">' +
+            '<p style="margin-bottom:12px;">正在从飞书获取企业组织架构...</p>' +
+            '<div style="width:40px;height:40px;border:3px solid #e0e0e0;border-top-color:#667eea;border-radius:50%;margin:0 auto;animation:spin 0.8s linear infinite;"></div>' +
+            '<style>@keyframes spin{to{transform:rotate(360deg);}}</style></div>';
+        openModal('同步组织架构', body);
+
+        // Get token
+        fetch(proxyUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                url: 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json; charset=utf-8' },
+                body: JSON.stringify({ app_id: cfg.appId, app_secret: cfg.appSecret })
+            })
+        }).then(function(r) { return r.json(); }).then(function(tokenRes) {
+            if (!tokenRes.tenant_access_token && !tokenRes.data) {
+                throw new Error('获取Token失败: ' + JSON.stringify(tokenRes));
+            }
+            var token = tokenRes.tenant_access_token || (tokenRes.data && tokenRes.data.tenant_access_token);
+
+            // Fetch users
+            return getAllUsers(token);
+        }).then(function(usersRes) {
+            var users = [];
+            if (usersRes.data && usersRes.data.items) users = usersRes.data.items;
+            else if (usersRes.items) users = usersRes.items;
+
+            if (users.length === 0) { throw new Error('未找到企业用户'); }
+
+            var importedUsers = [];
+            users.forEach(function(u) {
+                var deptNames = (u.department_ids || []).map(function(id){ return id; }).join(', ');
+                var role = guessRole(deptNames, u.name || '', u.is_leader || false);
+                var existing = getUsers();
+                var found = existing.find(function(eu){ return eu.username === (u.mobile || u.email || u.name); });
+                if (found) {
+                    found.role = role;
+                    found.displayName = u.name || found.displayName;
+                    found.feishuUserId = u.open_id;
+                    found.department = deptNames;
+                    importedUsers.push(found);
+                } else {
+                    importedUsers.push({
+                        id: 'u_' + (u.open_id || Date.now()),
+                        username: u.mobile || u.email || u.name || '',
+                        password: 'jiaofu888',
+                        role: role,
+                        displayName: u.name || '',
+                        department: deptNames,
+                        feishuUserId: u.open_id
+                    });
+                }
+            });
+
+            localStorage.setItem('users', JSON.stringify(importedUsers));
+            alert('同步完成！共导入 ' + importedUsers.length + ' 个用户。
+
+默认密码: jiaofu888
+请告知团队成员使用手机号/邮箱登录。');
+            window.closeModal();
+        }).catch(function(err) {
+            alert('同步失败: ' + err.message);
+            window.closeModal();
+        });
+    };
+
+    // Settings page: add proxy URL config and sync button
+    var settingsSyncInit = function() {
+        var feishuSection = document.querySelector('#settingsPage');
+        if (!feishuSection) return;
+        // Add proxy URL input and sync button after the feishu config section
+        var testBtn = document.getElementById('testFeishuConnection');
+        if (!testBtn) return;
+        var btnContainer = testBtn.parentElement;
+        if (!btnContainer) return;
+
+        // Check if already added
+        if (document.getElementById('proxyUrl')) return;
+
+        // Add proxy URL input
+        var proxyDiv = document.createElement('div');
+        proxyDiv.className = 'form-group';
+        proxyDiv.style.marginTop = '12px';
+        proxyDiv.innerHTML = '<label for="proxyUrl">CORS 代理地址</label><input type="text" id="proxyUrl" placeholder="https://your-project.vercel.app/api/proxy" style="width:100%;"><small>部署 Vercel 后获得的代理 URL</small>';
+        btnContainer.parentElement.insertBefore(proxyDiv, btnContainer.nextSibling);
+
+        // Add sync org button
+        var syncDiv = document.createElement('div');
+        syncDiv.style.marginTop = '12px';
+        syncDiv.innerHTML = '<button class="btn btn-primary" id="syncFeishuOrgBtn">从企业架构同步用户</button>';
+        proxyDiv.parentElement.appendChild(syncDiv);
+
+        // Load saved proxy url
+        var savedProxy = localStorage.getItem('proxyUrl') || '';
+        document.getElementById('proxyUrl').value = savedProxy;
+
+        // Save proxy url on change
+        document.getElementById('proxyUrl').addEventListener('change', function() {
+            localStorage.setItem('proxyUrl', this.value);
+            // Update BitableAPI proxy
+            if (window.BitableAPI && window.BitableAPI.setProxyUrl) {
+                window.BitableAPI.setProxyUrl(this.value);
+            }
+        });
+
+        // Sync button
+        document.getElementById('syncFeishuOrgBtn').addEventListener('click', function() {
+            window.syncFeishuOrg();
+        });
+    };
+
+    // Run settings init on page load (for settings page)
+    setTimeout(settingsSyncInit, 500);
 
 
     console.log('系统初始化完成！');

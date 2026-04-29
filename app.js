@@ -1515,7 +1515,6 @@ document.addEventListener('DOMContentLoaded', function() {
         body += '<p><b>渠道:</b> ' + (order.channel || '-') + ' | <b>地址:</b> ' + (order.address || '-') + '</p>';
         body += '<p><b>当前状态:</b> <span style="color:orange;">' + (order.status || '未发货') + '</span></p>';
         body += '</div>';
-        body += '<div class="form-group"><label>备注</label><input type="text" id="shipmentNote" placeholder="发货备注" style="width:100%;padding:8px;"></div>';
         body += '<p style="color:#666;font-size:13px;">确认后将状态改为 <b style="color:green;">已发货</b></p>';
         window.openModal('确认发货', body);
         var confirmBtn = document.querySelector('.modal-confirm');
@@ -1523,13 +1522,13 @@ document.addEventListener('DOMContentLoaded', function() {
             confirmBtn.style.background = '#28a745';
             confirmBtn.textContent = '确认发货';
             confirmBtn.onclick = function() {
-                var note = document.getElementById('shipmentNote').value || '';
+
                 orders.forEach(function(item) {
                     if (item.id == id) {
                         item.status = '已发货';
                         item.shippingStatus = '已发货';
                         item.shipTime = new Date().toISOString();
-                        item.shipNote = note;
+
                     }
                 });
                 localStorage.setItem('orders', JSON.stringify(orders));
